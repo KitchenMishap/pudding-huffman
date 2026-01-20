@@ -9,6 +9,36 @@ import (
 	"sync"
 )
 
+type ForensicFloat struct {
+	Mantissa int64
+	Exponent int64
+}
+
+func NewForensicFloat(amount int64) *ForensicFloat {
+	if amount == 0 {
+		return &ForensicFloat{Mantissa: 0, Exponent: 0}
+	}
+	exponent := int64(0)
+	for amount > 0 && amount%10 == 0 {
+		amount /= 10
+		exponent++
+	}
+	return &ForensicFloat{Mantissa: amount, Exponent: exponent}
+}
+
+func (f ForensicFloat) Recover() int64 {
+	exp := f.Exponent
+	result := f.Mantissa
+	if result == 0 {
+		return result
+	}
+	for exp > 0 {
+		result *= exp
+		exp--
+	}
+	return result
+}
+
 type Histogram struct {
 	// Sharding the histogram map reduces lock contention on the map(s)
 	shards [256]map[int64]int64
@@ -21,25 +51,33 @@ func (h *Histogram) Add(amount int64) {
 	if h.shards[idx] == nil {
 		h.shards[idx] = make(map[int64]int64, 100000)
 	}
-	h.shards[idx][amount]++
+	ff := NewForensicFloat(amount)
+	h.shards[idx][ff.Mantissa]++
 	h.mu[idx].Unlock()
 }
 
 type Entry struct {
-	Amount int64
-	Count  int64
+	Mantissa int64
+	Count    int64
 }
 
 func (h *Histogram) MergeAndSort() []Entry {
-	var allEntries []Entry
+	theMap := make(map[int64]int64)
 
+	// Merge
 	for i := 0; i < 256; i++ {
 		h.mu[i].Lock()
-		for amount, count := range h.shards[i] {
-			allEntries = append(allEntries, Entry{Amount: amount, Count: count})
+		for mantissa, count := range h.shards[i] {
+			theMap[mantissa] += count
 		}
 		h.mu[i].Unlock()
 	}
+	// Extract
+	allEntries := make([]Entry, 0)
+	for mantissa, count := range theMap {
+		allEntries = append(allEntries, Entry{Mantissa: mantissa, Count: count})
+	}
+	// Sort
 	sort.Slice(allEntries, func(i, j int) bool {
 		return allEntries[i].Count > allEntries[j].Count
 	})
@@ -142,8 +180,8 @@ func GatherStatistics(folder string) error {
 	wg.Wait()
 
 	entries := hist.MergeAndSort()
-	for i := 0; i < 100; i++ {
-		println(entries[i].Amount)
+	for i := 0; i < 20; i++ {
+		println(entries[i].Mantissa)
 	}
 
 	return nil
