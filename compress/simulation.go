@@ -89,9 +89,10 @@ func SimulateCompressionWithKMeans(amounts []int64,
 	expCodes map[int64]huffman.BitCode,
 	residualCodes map[int64]huffman.BitCode,
 	magnitudeCodes map[int64]huffman.BitCode,
-	epochToPhasePeaks [][]float64) CompressionStats {
+	epochToPhasePeaks [][]float64) (CompressionStats, [][7]int64) {
 
 	blocks := len(blockToTxo)
+	epochs := blocks/blocksPerEpoch + 1
 
 	var stats CompressionStats
 	// Escape lengths (the length of the Huffman code for "Everything Else")
@@ -100,6 +101,9 @@ func SimulateCompressionWithKMeans(amounts []int64,
 	// There is no distinct escape code for stage 2b. It is included in the 3 bit "peak number" (when it is 7)
 	// esc2bLen := residualCodes[2100000000000000].Length  Can't use -1 for this one, -1 is a valid residual
 	// exponents encode 100% of values, so have no escape code
+
+	// Counter of peak-index popularities for each epoch
+	peakStrengths := make([][7]int64, epochs)
 
 	block := 0
 	for txo := int64(0); txo < int64(len(amounts)); txo++ {
@@ -135,9 +139,13 @@ func SimulateCompressionWithKMeans(amounts []int64,
 		// Stage 2b: k-means check
 		stats.TotalBits += uint64(esc2Len) // Pay the second escape penalty
 		if epochToPhasePeaks[epochID] != nil {
-			e, _, r := kmeans.ExpPeakResidual(amount, epochToPhasePeaks[epochID])
+			e, peakIdx, r := kmeans.ExpPeakResidual(amount, epochToPhasePeaks[epochID])
 			if rCode, ok := residualCodes[r]; ok {
 				stats.TotalBits += uint64(3) // 3 bits for the peak number (0..6 or 7 for escape)
+
+				// Strengthen the appropriate peak index for the appropriate epochID
+				peakStrengths[epochID][peakIdx]++
+
 				// Also need the exponent code. It should always be there (no "everything else" escape for exponents)
 				if eCode, ok := expCodes[int64(e)]; ok {
 					stats.TotalBits += uint64(eCode.Length)
@@ -161,5 +169,5 @@ func SimulateCompressionWithKMeans(amounts []int64,
 		stats.TotalBits += uint64(mag)         // The bits themselves
 		stats.LiteralHits++
 	}
-	return stats
+	return stats, peakStrengths
 }

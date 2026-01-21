@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"github.com/KitchenMishap/pudding-huffman/blockchain"
@@ -8,6 +9,7 @@ import (
 	"github.com/KitchenMishap/pudding-huffman/derived"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"github.com/KitchenMishap/pudding-huffman/kmeans"
+	"os"
 	"runtime"
 	"sort"
 	"sync"
@@ -63,7 +65,7 @@ func (h *Histograms) MergeAndSort() (amountsMap map[int64]int64, mantissasMap ma
 	}
 
 	println("Truncating...")
-	amountTruncated := TruncateMapWithEscapeCode(amountMap, 10, 0.9, -1)
+	amountTruncated := TruncateMapWithEscapeCode(amountMap, 10000, 0.99, -1)
 	println("Amount: truncated to ", len(amountTruncated))
 	mantissaTruncated := TruncateMapWithEscapeCode(mantissaMap, 10000, 0.99, -1)
 	println("mantissa: truncated to ", len(mantissaTruncated))
@@ -280,7 +282,7 @@ func GatherStatistics(folder string) error {
 	magnitudeCodes := make(map[int64]huffman.BitCode)
 	huffman.GenerateBitCodes(huffMagnitudeRoot, 0, 0, magnitudeCodes)
 
-	result = compress.SimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes, residualCodes, magnitudeCodes, epochToPhasePeaks)
+	result, peakStrengths := compress.SimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes, residualCodes, magnitudeCodes, epochToPhasePeaks)
 
 	println("TotalBits: ", result.TotalBits)
 	println("Celebrity hits: ", result.CelebrityHits)
@@ -291,5 +293,48 @@ func GatherStatistics(folder string) error {
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Finished **==")
 
+	exportOracleCSV("Oracle.csv", epochToPhasePeaks, peakStrengths)
+
 	return nil
+}
+
+type PeakResult struct {
+	Value    float64
+	Strength int64
+}
+
+func exportOracleCSV(filename string, epochToPhasePeaks [][]float64, peakStrengths [][7]int64) {
+	f, _ := os.Create(filename)
+	defer f.Close()
+	w := csv.NewWriter(f)
+
+	header := []string{"Epoch"}
+	for i := 0; i < 7; i++ {
+		header = append(header, fmt.Sprintf("P%d_Value", i), fmt.Sprintf("P%d_Strength", i))
+	}
+	w.Write(header)
+
+	for epochID, peaks := range epochToPhasePeaks {
+		if peaks == nil {
+			continue
+		}
+		row := []string{fmt.Sprintf("%d", epochID)}
+
+		results := make([]PeakResult, 7)
+		for peakIdx := range peaks {
+			results[peakIdx] = PeakResult{
+				Value:    peaks[peakIdx],
+				Strength: peakStrengths[epochID][peakIdx],
+			}
+		}
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Strength > results[j].Strength
+		})
+
+		for peakPriority := 0; peakPriority < 7; peakPriority++ {
+			row = append(row, fmt.Sprintf("%f", results[peakPriority]), fmt.Sprintf("%d", results[peakPriority]))
+		}
+		w.Write(row)
+	}
+	w.Flush()
 }
