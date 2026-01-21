@@ -2,90 +2,112 @@ package jobs
 
 import (
 	"errors"
+	"fmt"
 	"github.com/KitchenMishap/pudding-huffman/blockchain"
+	"github.com/KitchenMishap/pudding-huffman/compress"
 	"github.com/KitchenMishap/pudding-huffman/derived"
+	"github.com/KitchenMishap/pudding-huffman/huffman"
+	"github.com/KitchenMishap/pudding-huffman/kmeans"
 	"runtime"
 	"sort"
 	"sync"
+	"time"
 )
 
-type ForensicFloat struct {
-	Mantissa int64
-	Exponent int64
+type Histograms struct {
+	// Sharding the histogram maps reduces lock contention on the maps
+	shardsAmount   [256]map[int64]int64
+	shardsMantissa [256]map[int64]int64
+	shardsExponent [256]map[int64]int64
+	mu             [256]sync.Mutex
 }
 
-func NewForensicFloat(amount int64) *ForensicFloat {
-	if amount == 0 {
-		return &ForensicFloat{Mantissa: 0, Exponent: 0}
-	}
-	exponent := int64(0)
-	for amount > 0 && amount%10 == 0 {
-		amount /= 10
-		exponent++
-	}
-	return &ForensicFloat{Mantissa: amount, Exponent: exponent}
-}
-
-func (f ForensicFloat) Recover() int64 {
-	exp := f.Exponent
-	result := f.Mantissa
-	if result == 0 {
-		return result
-	}
-	for exp > 0 {
-		result *= exp
-		exp--
-	}
-	return result
-}
-
-type Histogram struct {
-	// Sharding the histogram map reduces lock contention on the map(s)
-	shards [256]map[int64]int64
-	mu     [256]sync.Mutex
-}
-
-func (h *Histogram) Add(amount int64) {
+func (h *Histograms) Add(amount int64) {
 	idx := amount & 0xFF
 	h.mu[idx].Lock()
-	if h.shards[idx] == nil {
-		h.shards[idx] = make(map[int64]int64, 100000)
+	if h.shardsAmount[idx] == nil {
+		h.shardsAmount[idx] = make(map[int64]int64, 100000)
+		h.shardsMantissa[idx] = make(map[int64]int64, 100000)
+		h.shardsExponent[idx] = make(map[int64]int64, 100000)
 	}
-	ff := NewForensicFloat(amount)
-	h.shards[idx][ff.Mantissa]++
+	ff := compress.NewForensicFloat(amount)
+	h.shardsAmount[idx][amount]++
+	h.shardsMantissa[idx][ff.Mantissa]++
+	h.shardsExponent[idx][ff.Exponent]++
 	h.mu[idx].Unlock()
 }
 
 type Entry struct {
-	Mantissa int64
-	Count    int64
+	Value int64
+	Count int64
 }
 
-func (h *Histogram) MergeAndSort() []Entry {
-	theMap := make(map[int64]int64)
+func (h *Histograms) MergeAndSort() (amountsMap map[int64]int64, mantissasMap map[int64]int64, exponentsMap map[int64]int64) {
+	amountMap := make(map[int64]int64)
+	mantissaMap := make(map[int64]int64)
+	exponentMap := make(map[int64]int64)
 
 	// Merge
 	for i := 0; i < 256; i++ {
 		h.mu[i].Lock()
-		for mantissa, count := range h.shards[i] {
-			theMap[mantissa] += count
+		for amount, count := range h.shardsAmount[i] {
+			amountMap[amount] += count
+		}
+		for mantissa, count := range h.shardsMantissa[i] {
+			mantissaMap[mantissa] += count
+		}
+		for exponent, count := range h.shardsExponent[i] {
+			exponentMap[exponent] += count
 		}
 		h.mu[i].Unlock()
 	}
-	// Extract
-	allEntries := make([]Entry, 0)
-	for mantissa, count := range theMap {
-		allEntries = append(allEntries, Entry{Mantissa: mantissa, Count: count})
+
+	println("Truncating...")
+	amountTruncated := TruncateMapWithEscapeCode(amountMap, 10, 0.9, -1)
+	println("Amount: truncated to ", len(amountTruncated))
+	mantissaTruncated := TruncateMapWithEscapeCode(mantissaMap, 10000, 0.99, -1)
+	println("mantissa: truncated to ", len(mantissaTruncated))
+	exponentTruncated := TruncateMapWithEscapeCode(exponentMap, 16, 1.0, -1)
+	println("exponent: truncated to ", len(exponentTruncated))
+
+	return amountTruncated, mantissaTruncated, exponentTruncated
+}
+
+func TruncateMapWithEscapeCode(all map[int64]int64, maxCodes int, captureCoverage float64, escapeCode int64) map[int64]int64 {
+	entries := make([]Entry, 0, len(all))
+	total := int64(0)
+	for k, v := range all {
+		total += v
+		entries = append(entries, Entry{Value: k, Count: v})
 	}
 	// Sort
-	sort.Slice(allEntries, func(i, j int) bool {
-		return allEntries[i].Count > allEntries[j].Count
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Count > entries[j].Count
 	})
-
-	return allEntries
+	// Truncate
+	some := make(map[int64]int64)
+	soFar := int64(0)
+	for entry := range entries {
+		soFar += entries[entry].Count
+		some[entries[entry].Value] = entries[entry].Count
+		if entry+1 >= maxCodes {
+			println("maxCodes reached")
+			break // maxCodes reached
+		}
+		if float64(soFar)/float64(total) >= captureCoverage {
+			println("capture coverage reached")
+			break // captureCoverage ratio met
+		}
+	}
+	some[escapeCode] = total - soFar
+	return some
 }
 
 func GatherStatistics(folder string) error {
+	var startTime = time.Now()
+	elapsed := time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Very start **==")
+
 	println("Please wait... opening files")
 	reader, err := blockchain.NewChainReader(folder)
 	if err != nil {
@@ -155,8 +177,11 @@ func GatherStatistics(folder string) error {
 		return err
 	}
 
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Creating the histogram **==")
+
 	println("Creating the histogram...")
-	hist := Histogram{}
+	hist := Histograms{}
 
 	numWorkers := int64(runtime.NumCPU())
 	var wg sync.WaitGroup
@@ -179,10 +204,82 @@ func GatherStatistics(folder string) error {
 	}
 	wg.Wait()
 
-	entries := hist.MergeAndSort()
-	for i := 0; i < 20; i++ {
-		println(entries[i].Mantissa)
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Merge and sort **==")
+	amountsMap, mantissasMap, exponentsMap := hist.MergeAndSort()
+
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Huffman stuff **==")
+
+	println("Huffman tree for amounts...")
+	huffAmountRoot := huffman.BuildHuffmanTree(amountsMap)
+	amountCodes := make(map[int64]huffman.BitCode)
+	huffman.GenerateBitCodes(huffAmountRoot, 0, 0, amountCodes)
+	println("Huffman tree for mantissas...")
+	huffMantissaRoot := huffman.BuildHuffmanTree(mantissasMap)
+	mantissaCodes := make(map[int64]huffman.BitCode)
+	huffman.GenerateBitCodes(huffMantissaRoot, 0, 0, mantissaCodes)
+	println("Huffman tree for exponents...")
+	huffExponentRoot := huffman.BuildHuffmanTree(exponentsMap)
+	exponentCodes := make(map[int64]huffman.BitCode)
+	huffman.GenerateBitCodes(huffExponentRoot, 0, 0, exponentCodes)
+
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression **==")
+	const blocksPerEpoch = 144 * 7 // Roughly a week
+	result, amountsEachEpoch := compress.SimulateCompression(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes)
+
+	println("TotalBits: ", result.TotalBits)
+	println("Celebrity hits: ", result.CelebrityHits)
+	println("Scientific hits: ", result.ScientificHits)
+	println("Literal hits: ", result.LiteralHits)
+
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Doing kmeans stuff (parallel) **==")
+
+	epochs := blocks/blocksPerEpoch + 1 // +1 for the partial epoch at the end
+	epochToPhasePeaks := kmeans.ParallelKMeans(amountsEachEpoch, epochs)
+
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Build residuals map (serial) **==")
+	residualsMap := make(map[int64]int64)
+	block := int64(0)
+	epochID := int64(0)
+	for txo, amount := range amounts {
+		if block+1 < blocks && txo >= int(blockToTxo[block+1]) {
+			block++
+			epochID = block / blocksPerEpoch
+		}
+		if epochToPhasePeaks[epochID] != nil {
+			_, _, r := kmeans.ExpPeakResidual(amount, epochToPhasePeaks[epochID])
+			residualsMap[r]++
+		}
 	}
+
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
+
+	println("Huffman tree for clockPhase residuals")
+	esc := int64(2100000000000000) // As we can't use -1
+	residualTruncated := TruncateMapWithEscapeCode(residualsMap, 10000, 0.99, esc)
+	println("Huffman tree for residuals...")
+	huffResidualRoot := huffman.BuildHuffmanTree(residualTruncated)
+	residualCodes := make(map[int64]huffman.BitCode)
+	huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodes)
+
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression with kmeans **==")
+
+	result = compress.SimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes, residualCodes, epochToPhasePeaks)
+
+	println("TotalBits: ", result.TotalBits)
+	println("Celebrity hits: ", result.CelebrityHits)
+	println("Scientific hits: ", result.ScientificHits)
+	println("KMeans hits: ", result.KMeansHits)
+	println("Literal hits: ", result.LiteralHits)
+
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Finished **==")
 
 	return nil
 }
