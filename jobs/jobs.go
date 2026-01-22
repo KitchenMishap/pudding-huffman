@@ -229,7 +229,7 @@ func GatherStatistics(folder string) error {
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression **==")
 	const blocksPerEpoch = 144 * 7 // Roughly a week
-	result, amountsEachEpoch, magFreqs := compress.SimulateCompression(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes)
+	result, amountsEachEpoch, magFreqs := compress.ParallelSimulateCompression(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes)
 
 	println("TotalBits: ", result.TotalBits)
 	println("Celebrity hits: ", result.CelebrityHits)
@@ -320,7 +320,7 @@ func GatherStatistics(folder string) error {
 	magnitudeCodes := make(map[int64]huffman.BitCode)
 	huffman.GenerateBitCodes(huffMagnitudeRoot, 0, 0, magnitudeCodes)
 
-	result, peakStrengths := compress.SimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes, residualCodes, magnitudeCodes, epochToPhasePeaks)
+	result, peakStrengths := compress.ParallelSimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, amountCodes, mantissaCodes, exponentCodes, residualCodes, magnitudeCodes, epochToPhasePeaks)
 
 	println("TotalBits: ", result.TotalBits)
 	println("Celebrity hits: ", result.CelebrityHits)
@@ -370,7 +370,7 @@ func exportOracleCSV(filename string, epochToPhasePeaks [][]float64, peakStrengt
 		})
 
 		for peakPriority := 0; peakPriority < 7; peakPriority++ {
-			row = append(row, fmt.Sprintf("%.0f", results[peakPriority].Value), fmt.Sprintf("%d", results[peakPriority].Strength))
+			row = append(row, fmt.Sprintf("%.4f", results[peakPriority].Value), fmt.Sprintf("%d", results[peakPriority].Strength))
 		}
 		w.Write(row)
 	}
