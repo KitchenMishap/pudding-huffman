@@ -20,7 +20,7 @@ type CompressionStats struct {
 func ParallelAmountStatistics(amounts []int64,
 	blocksPerEpoch int,
 	blockToTxo []int64,
-	celebCodes map[int64]huffman.BitCode,
+	epochToCelebCodes []map[int64]huffman.BitCode,
 	max_base_10_exp int) (CompressionStats, [][]int64, []int64, []int64) {
 
 	blocks := len(blockToTxo)
@@ -71,7 +71,7 @@ func ParallelAmountStatistics(amounts []int64,
 					amount := amounts[txo]
 
 					// Stage 1: Celebrity
-					if _, ok := celebCodes[amount]; ok {
+					if _, ok := epochToCelebCodes[epochID][amount]; ok {
 						local.stats.CelebrityHits++
 						continue
 					}
@@ -136,7 +136,7 @@ func ParallelAmountStatistics(amounts []int64,
 func ParallelGatherResidualFrequenciesByExp10(amounts []int64,
 	blocksPerEpoch int,
 	blockToTxo []int64,
-	celebCodes map[int64]huffman.BitCode,
+	epochToCelebCodes []map[int64]huffman.BitCode,
 	epochToPhasePeaks [][]float64,
 	max_base_10_exp int) [20]map[int64]int64 { // The result: outer array index is the exponent (number of decimal zeros). Inner map is freq for each possible residual
 
@@ -187,11 +187,11 @@ func ParallelGatherResidualFrequenciesByExp10(amounts []int64,
 					amount := amounts[txo]
 
 					// Stage 1: Celebrity
-					if _, ok := celebCodes[amount]; ok {
+					if _, ok := epochToCelebCodes[epochID][amount]; ok {
 						continue
 					}
 
-					if epochToPhasePeaks[epochID] == nil {
+					if epochToPhasePeaks[epochID] == nil || len(epochToPhasePeaks[epochID]) == 0 {
 						// This is probably an "early" week (epoch) where there weren't enough amount peaks to
 						// do the k-means analysis on (other than common "celebrity" amounts which bypass this already)
 						continue
@@ -240,7 +240,7 @@ func ParallelGatherResidualFrequenciesByExp10(amounts []int64,
 func ParallelSimulateCompressionWithKMeans(amounts []int64,
 	blocksPerEpoch int,
 	blockToTxo []int64,
-	celebCodes map[int64]huffman.BitCode,
+	epochToCelebCodes []map[int64]huffman.BitCode,
 	expCodes map[int64]huffman.BitCode,
 	residualCodesByExp []map[int64]huffman.BitCode,
 	magnitudeCodes map[int64]huffman.BitCode,
@@ -283,8 +283,9 @@ func ParallelSimulateCompressionWithKMeans(amounts []int64,
 
 					// Stage 1: Celebrity cost (cost of MAXINT means celebrity status not available)
 					// Intended to capture common numbers of satoshis like 50BTC and 0 sats
+					// The celebrity codes are now PER EPOCH
 					celebCost := math.MaxInt
-					if aCode, ok := celebCodes[amount]; ok {
+					if aCode, ok := epochToCelebCodes[epochID][amount]; ok {
 						celebCost = aCode.Length
 					}
 
@@ -292,11 +293,11 @@ func ParallelSimulateCompressionWithKMeans(amounts []int64,
 					// Intended to capture the "ghosts" of round numbers in fiat-land, when they are converted to satoshis
 					ghostCost := math.MaxInt
 					// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
-					if amount > 0 && epochToPhasePeaks[epochID] != nil {
+					if amount > 0 && epochToPhasePeaks[epochID] != nil && len(epochToPhasePeaks[epochID]) > 0 {
 						e, peakIdx, r := kmeans.ExpPeakResidual(amount, epochToPhasePeaks[epochID])
 						if rCode, ok := residualCodesByExp[e][r]; ok {
 							ghostCost = 3                           // Firstly there is a 3 bit cost to select which of the 7 stored peaks (for this epoch) we're near
-							local.peakStrengths[epochID][peakIdx]++ // Yes this IS supposed to be here. Its for oracle price prediction
+							local.peakStrengths[epochID][peakIdx]++ // Yes this IS supposed to be here. It's for oracle price prediction
 							if eCode, ok := expCodes[int64(e)]; ok {
 								ghostCost += eCode.Length // Secondly there are some bits to encode the number of decimal points (exp)
 							} else {

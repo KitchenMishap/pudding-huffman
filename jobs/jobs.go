@@ -169,48 +169,86 @@ func GatherStatistics(folder string) error {
 	}
 
 	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Creating the histogram **==")
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Creating the celebrity histogramS PER EPOCH **==")
 
-	println("Creating the histogram...")
-	hist := Histograms{}
-
-	numWorkers := int64(runtime.NumCPU())
-	var wg sync.WaitGroup
-	chunkSize := int64(numTxos / numWorkers)
-	for i := int64(0); i < numWorkers; i++ {
-		wg.Add(1)
-		go func(workerID int64) {
-			defer wg.Done()
-
-			start := int64(workerID) * chunkSize
-			end := start + chunkSize
-			if workerID == numWorkers-1 {
-				end = numTxos
-			}
-
-			for m := start; m < end; m++ {
-				hist.Add(amounts[m])
-			}
-		}(i)
+	const blocksPerEpoch = 144 * 7 // Roughly a week
+	numEpochs := int64(blocks/blocksPerEpoch + 1)
+	numWorkers := int(runtime.NumCPU())
+	if numWorkers > 4 {
+		numWorkers -= 2 // Some spare for the OS
 	}
+
+	// Here we use the "worker pool" ("feed the  beast") pattern
+	// 1. Create a channel to hold the epochIDs
+	epochChan := make(chan int, numEpochs)
+
+	// 2. Create a slice to store the results (one map per epoch)
+	epochToCelebsMap := make([]map[int64]int64, numEpochs)
+
+	var wg sync.WaitGroup
+
+	// 3. Start the pool of workers
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Workers pull from the channel until it's closed
+			for eID := range epochChan {
+				// --- WORKER LOGIC START ---
+				localMap := make(map[int64]int64)
+
+				startBlock := int64(eID * blocksPerEpoch)
+				endBlock := startBlock + blocksPerEpoch
+				if endBlock > blocks {
+					endBlock = blocks
+				}
+
+				for b := startBlock; b < endBlock; b++ {
+					txoStart := blockToTxo[b]
+					txoEnd := numTxos // Rare fallback
+					if b+1 < blocks {
+						txoEnd = blockToTxo[b+1] // Common case
+					}
+
+					for m := txoStart; m < txoEnd; m++ {
+						localMap[amounts[m]]++
+					}
+				}
+
+				// Save result to shared slice (this IS threadsafe because eID is unique)
+				epochToCelebsMap[eID] = localMap
+				// --- WORKER LOGIC END ---
+			}
+		}()
+	}
+	// 4. Feed the Channel (The Producer)
+	for eID := 0; eID < int(numEpochs); eID++ {
+		epochChan <- eID
+	}
+	close(epochChan) // Crucial: Workers stop when the channel is empty and closed
+
 	wg.Wait()
+	// END Stuff suggested by Gemini
 
 	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Merge and sort **==")
-	celebsMap := hist.MergeAndSort()
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Huffman per Epoch **==\n")
 
-	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Huffman stuff **==")
+	// Build the Forest of Trees
+	epochToCelebCodes := make([]map[int64]huffman.BitCode, numEpochs)
+	for eID := 0; eID < int(numEpochs); eID++ {
+		if len(epochToCelebsMap[eID]) == 0 {
+			continue
+		}
 
-	println("Huffman tree for celebrity amounts...")
-	huffCelebRoot := huffman.BuildHuffmanTree(celebsMap)
-	celebCodes := make(map[int64]huffman.BitCode)
-	huffman.GenerateBitCodes(huffCelebRoot, 0, 0, celebCodes)
+		epochCelebsTruncated := TruncateMapWithEscapeCode(epochToCelebsMap[eID], 10000, 0.99, ESCAPE_VALUE)
+		huffCelebRoot := huffman.BuildHuffmanTree(epochCelebsTruncated)
+		epochToCelebCodes[eID] = make(map[int64]huffman.BitCode)
+		huffman.GenerateBitCodes(huffCelebRoot, 0, 0, epochToCelebCodes[eID])
+	}
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression **==")
-	const blocksPerEpoch = 144 * 7 // Roughly a week
-	result, amountsEachEpoch, magFreqs, expFreqs := compress.ParallelAmountStatistics(amounts, blocksPerEpoch, blockToTxo, celebCodes, MAX_BASE_10_EXP)
+	result, amountsEachEpoch, magFreqs, expFreqs := compress.ParallelAmountStatistics(amounts, blocksPerEpoch, blockToTxo, epochToCelebCodes, MAX_BASE_10_EXP)
 
 	println("Celebrity hits: ", result.CelebrityHits)
 	println("Literal hits: ", result.LiteralHits)
@@ -224,7 +262,7 @@ func GatherStatistics(folder string) error {
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Build residuals map (now parallel, now per EXP) **==")
 
-	residualsMapByExp := compress.ParallelGatherResidualFrequenciesByExp10(amounts, blocksPerEpoch, blockToTxo, celebCodes, epochToPhasePeaks, MAX_BASE_10_EXP)
+	residualsMapByExp := compress.ParallelGatherResidualFrequenciesByExp10(amounts, blocksPerEpoch, blockToTxo, epochToCelebCodes, epochToPhasePeaks, MAX_BASE_10_EXP)
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
@@ -265,7 +303,7 @@ func GatherStatistics(folder string) error {
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression with kmeans **==")
 
-	result, peakStrengths := compress.ParallelSimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, celebCodes, expCodes, residualCodesByExp, magnitudeCodes, epochToPhasePeaks)
+	result, peakStrengths := compress.ParallelSimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, epochToCelebCodes, expCodes, residualCodesByExp, magnitudeCodes, epochToPhasePeaks)
 
 	println("TotalBits: ", result.TotalBits)
 	println("Celebrity hits: ", result.CelebrityHits)
