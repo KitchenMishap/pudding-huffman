@@ -240,7 +240,8 @@ func GatherStatistics(folder string) error {
 			continue
 		}
 
-		epochCelebsTruncated := TruncateMapWithEscapeCode(epochToCelebsMap[eID], 10000, 0.99, ESCAPE_VALUE)
+		captureCoverage := 0.7 // If we allowed capture of more celebrities (say, 0.99) the kmeans would be starved of info
+		epochCelebsTruncated := TruncateMapWithEscapeCode(epochToCelebsMap[eID], 100000, captureCoverage, ESCAPE_VALUE)
 		huffCelebRoot := huffman.BuildHuffmanTree(epochCelebsTruncated)
 		epochToCelebCodes[eID] = make(map[int64]huffman.BitCode)
 		huffman.GenerateBitCodes(huffCelebRoot, 0, 0, epochToCelebCodes[eID])
