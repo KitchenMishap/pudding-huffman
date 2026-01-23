@@ -9,6 +9,7 @@ import (
 	"github.com/KitchenMishap/pudding-huffman/derived"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"github.com/KitchenMishap/pudding-huffman/kmeans"
+	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -50,7 +51,7 @@ func (h *Histograms) MergeAndSort() (shardsAmount map[int64]int64) {
 	}
 
 	println("Truncating...")
-	amountTruncated := TruncateMapWithEscapeCode(amountsMap, 10000, 0.99, -1)
+	amountTruncated := TruncateMapWithEscapeCode(amountsMap, 100000, 0.99, -1)
 	println("Amount: truncated to (celebs)", len(amountTruncated))
 
 	return amountTruncated
@@ -211,7 +212,6 @@ func GatherStatistics(folder string) error {
 	const blocksPerEpoch = 144 * 7 // Roughly a week
 	result, amountsEachEpoch, magFreqs, expFreqs := compress.ParallelAmountStatistics(amounts, blocksPerEpoch, blockToTxo, celebCodes, MAX_BASE_10_EXP)
 
-	println("TotalBits: ", result.TotalBits)
 	println("Celebrity hits: ", result.CelebrityHits)
 	println("Literal hits: ", result.LiteralHits)
 
@@ -222,71 +222,25 @@ func GatherStatistics(folder string) error {
 	epochToPhasePeaks := kmeans.ParallelKMeans(amountsEachEpoch, epochs)
 
 	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Build residuals map (now parallel) **==")
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Build residuals map (now parallel, now per EXP) **==")
 
-	var lock sync.Mutex
-	residualsMap := make(map[int64]int64)
-
-	// Define the worker pool
-	numWorkerers := 40
-	jobs := make(chan int64, 100) // Channel of block indices
-	var wgwg sync.WaitGroup
-
-	// The "Map" phase: Workers with local buffers
-	for w := 0; w < numWorkerers; w++ {
-		wgwg.Add(1)
-		go func() {
-			defer wgwg.Done()
-
-			// Private local buffers to avoid contention
-			localResiduals := make(map[int64]int64)
-
-			for blockIdx := range jobs {
-				// process blocks, calculate peaks
-				epochID := blockIdx / blocksPerEpoch
-				firstTxo := blockToTxo[blockIdx]
-				lastTxo := int64(len(amounts)) // Fallback
-				if int64(blockIdx+1) < blocks {
-					lastTxo = blockToTxo[blockIdx+1]
-				}
-				if epochToPhasePeaks[epochID] != nil {
-					for txo := firstTxo; txo < lastTxo; txo++ {
-						localAmount := amounts[txo]
-						_, _, r := kmeans.ExpPeakResidual(localAmount, epochToPhasePeaks[epochID])
-						// Record hits locally
-						localResiduals[r]++
-					}
-				}
-			}
-
-			// The reduce phase
-			lock.Lock()
-			for k, v := range localResiduals {
-				residualsMap[k] += v
-			}
-			lock.Unlock()
-		}()
-	}
-
-	// Feed the beast
-	for i := int64(0); i < blocks; i++ {
-		jobs <- i
-	}
-	close(jobs)
-	wgwg.Wait()
+	residualsMapByExp := compress.ParallelGatherResidualFrequenciesByExp10(amounts, blocksPerEpoch, blockToTxo, celebCodes, epochToPhasePeaks, MAX_BASE_10_EXP)
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
 
-	println("Huffman tree for clockPhase residuals")
-	residualTruncated := TruncateMapWithEscapeCode(residualsMap, 100000, 0.99, ESCAPE_VALUE)
-	println("Huffman tree for residuals...")
-	huffResidualRoot := huffman.BuildHuffmanTree(residualTruncated)
-	residualCodes := make(map[int64]huffman.BitCode)
-	huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodes)
-
-	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression with kmeans **==")
+	println("Huffman trees for clockPhase residuals AT EACH EXP MAGNITUDE")
+	residualCodesByExp := make([]map[int64]huffman.BitCode, MAX_BASE_10_EXP)
+	for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
+		// Build a specific tree for this exponent
+		// Lets pick a max number of codes.
+		maxCodes := GetSensibleMaxCodes(exp)
+		residualTruncated := TruncateMapWithEscapeCode(residualsMapByExp[exp], maxCodes, 0.99, ESCAPE_VALUE)
+		println("Huffman tree for residuals...")
+		huffResidualRoot := huffman.BuildHuffmanTree(residualTruncated)
+		residualCodesByExp[exp] = make(map[int64]huffman.BitCode)
+		huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesByExp[exp])
+	}
 
 	println("Huffman tree for literal magnitudes...")
 	magnitudesMap := make(map[int64]int64)
@@ -308,7 +262,10 @@ func GatherStatistics(folder string) error {
 	expCodes := make(map[int64]huffman.BitCode)
 	huffman.GenerateBitCodes(huffExpRoot, 0, 0, expCodes)
 
-	result, peakStrengths := compress.ParallelSimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, celebCodes, expCodes, residualCodes, magnitudeCodes, epochToPhasePeaks, ESCAPE_VALUE)
+	elapsed = time.Since(startTime)
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression with kmeans **==")
+
+	result, peakStrengths := compress.ParallelSimulateCompressionWithKMeans(amounts, blocksPerEpoch, blockToTxo, celebCodes, expCodes, residualCodesByExp, magnitudeCodes, epochToPhasePeaks)
 
 	println("TotalBits: ", result.TotalBits)
 	println("Celebrity hits: ", result.CelebrityHits)
@@ -326,6 +283,27 @@ func GatherStatistics(folder string) error {
 type PeakResult struct {
 	Value    float64
 	Strength int64
+}
+
+func GetSensibleMaxCodes(exponent int) int {
+	// W is our "Roundness Window" in log10 space (e.g., 0.01 for 1%)
+	const W = 0.05
+
+	// Calculate the integer width of that 1% wedge
+	upper := math.Pow(10, float64(exponent)+W/2)
+	lower := math.Pow(10, float64(exponent)-W/2)
+
+	// The number of integers we need to cover the window
+	needed := int(math.Ceil(upper - lower))
+
+	// Guardrails
+	if needed < 10 {
+		return 10 // Minimum to capture even tiny peaks
+	}
+	if needed > 1000000 {
+		return 1000000 // Your "Silliness" cap
+	}
+	return needed
 }
 
 func exportOracleCSV(filename string, epochToPhasePeaks [][]float64, peakStrengths [][7]int64) {
