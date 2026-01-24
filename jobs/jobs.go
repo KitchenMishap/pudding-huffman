@@ -314,7 +314,7 @@ func GatherStatistics(folder string) error {
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression **==")
-	result, magFreqs, expFreqs := compress.ParallelAmountStatistics(amounts, blocksPerEpoch, blocksPerMicroEpoch, blockToTxo, epochToCelebCodes, MAX_BASE_10_EXP)
+	result, magFreqs, expFreqs := compress.ParallelAmountStatistics(amounts, blocksPerEpoch, blockToTxo, epochToCelebCodes, MAX_BASE_10_EXP)
 
 	fmt.Printf("Celebrity hits: %d\n", result.CelebrityHits)
 	fmt.Printf("Literal hits: %d\n", result.LiteralHits)
