@@ -314,7 +314,7 @@ func GatherStatistics(folder string) error {
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression **==")
-	result, amountsEachMicroEpoch, magFreqs, expFreqs := compress.ParallelAmountStatistics(amounts, blocksPerEpoch, blocksPerMicroEpoch, blockToTxo, epochToCelebCodes, MAX_BASE_10_EXP)
+	result, magFreqs, expFreqs := compress.ParallelAmountStatistics(amounts, blocksPerEpoch, blocksPerMicroEpoch, blockToTxo, epochToCelebCodes, MAX_BASE_10_EXP)
 
 	fmt.Printf("Celebrity hits: %d\n", result.CelebrityHits)
 	fmt.Printf("Literal hits: %d\n", result.LiteralHits)
@@ -323,7 +323,7 @@ func GatherStatistics(folder string) error {
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Identifying fiat peaks (parallel) **==")
 
 	microEpochs := blocks/blocksPerMicroEpoch + 1
-	microEpochToPhasePeaks := kmeans.ParallelKMeans(amountsEachMicroEpoch, microEpochs)
+	microEpochToPhasePeaks := kmeans.ParallelKMeans(amounts, blockToTxo, blocksPerMicroEpoch, epochToCelebCodes, blocksPerEpoch)
 	for meID := 0; meID < int(microEpochs); meID++ {
 		// Sort the peaks for this epoch so Peak 0 is always the smallest phase
 		sort.Float64s(microEpochToPhasePeaks[meID])

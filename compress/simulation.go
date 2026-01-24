@@ -23,7 +23,7 @@ func ParallelAmountStatistics(amounts []int64,
 	blocksPerPeriod int, // A period might be an epoch, or a microEpoch
 	blockToTxo []int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
-	max_base_10_exp int) (CompressionStats, [][]int64, []int64, []int64) {
+	max_base_10_exp int) (CompressionStats, []int64, []int64) {
 
 	blocks := len(blockToTxo)
 	periods := blocks/blocksPerPeriod + 1
@@ -135,7 +135,7 @@ func ParallelAmountStatistics(amounts []int64,
 		}
 	}
 
-	return finalStats, finalLiterals, finalMags, finalExpFreqs
+	return finalStats, finalMags, finalExpFreqs
 }
 
 func ParallelGatherResidualFrequenciesByExp10(amounts []int64,
