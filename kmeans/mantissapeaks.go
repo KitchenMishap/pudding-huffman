@@ -505,6 +505,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 			// Go through the microEpochs in this epoch
 			firstMe := epochID * microEpochsPerEpoch
 			for me := firstMe; me < firstMe+microEpochsPerEpoch; me++ {
+				buffer = buffer[:0] // Reset buffer but keep allocated memory
 				firstBlock := epochID*blocksPerEpoch + (me-firstMe)*blocksPerMicroEpoch
 				if firstBlock >= blocks {
 					break
@@ -513,6 +514,33 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 				if lastBlock > blocks {
 					lastBlock = blocks
 				}
+
+				// To emulate the old code, we need to know the txoIndex of the first txo of the first trans
+				// in the first block of this microepoch
+				blockHandle, err := handles.BlockHandleByHeight(firstBlock)
+				if err != nil {
+					return err
+				}
+				block, err := chain.BlockInterface(blockHandle)
+				if err != nil {
+					return err
+				}
+				transHandle, err := block.NthTransaction(0)
+				if err != nil {
+					return err
+				}
+				trans, err := chain.TransInterface(transHandle)
+				if err != nil {
+					return err
+				}
+				txoHandle, err := trans.NthTxo(0)
+				if err != nil {
+					return err
+				}
+				if !txoHandle.TxoHeightSpecified() {
+					return errors.New("txo height not specified")
+				}
+				firstTxoOfMe := txoHandle.TxoHeight()
 
 				// Go through the blocks in the microEpoch
 				for blockIdx := firstBlock; blockIdx < lastBlock; blockIdx++ {
@@ -541,7 +569,6 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 						if err != nil {
 							return err
 						}
-						buffer = buffer[:0] // Reset buffer but keep allocated memory
 						// For the thinning below to match the "old" code, in which txo indexed all the txo's
 						// in the entire chain, we'll need to know the firstTxo of the transaction
 						txoHandle, err := trans.NthTxo(0)
@@ -559,20 +586,19 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 							if _, ok := celebCodesPerEpoch[epochID][amount]; !ok {
 								// Only if NOT a celeb
 								// And thin it down
-								if oldCodeTxoIndex < 1000 || oldCodeTxoIndex%10 == 0 {
+								if oldCodeTxoIndex-firstTxoOfMe < 1000 || oldCodeTxoIndex%10 == 0 {
 									buffer = append(buffer, amount)
 								}
 							}
 						}
-
-						if len(buffer) < MIN_AMOUNT_COUNT_FOR_ANALYSIS {
-							microEpochToPhasePeaks[me] = nil
-						} else {
-							// This is the heavy lifting
-							microEpochToPhasePeaks[me] = FindEpochPeaksMain(buffer, localRand)
-						}
 					} // for transactions
 				} // for blocks
+				if len(buffer) < MIN_AMOUNT_COUNT_FOR_ANALYSIS {
+					microEpochToPhasePeaks[me] = nil
+				} else {
+					// This is the heavy lifting
+					microEpochToPhasePeaks[me] = FindEpochPeaksMain(buffer, localRand)
+				}
 			} // for micro epochs
 
 			// Report progress on completion of epoch
