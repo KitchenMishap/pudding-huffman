@@ -458,15 +458,25 @@ func expPeakResidual125(amount int64, logCentroids []float64) (exp int, peak int
 
 const MIN_AMOUNT_COUNT_FOR_ANALYSIS = 100
 
+// "beans/beansperbucket+1" usually works, but you get black swans when the division is exact
+func bucketCount(beans int64, beansPerBucket int64) int64 {
+	return (beans + beansPerBucket - 1) / beansPerBucket
+}
+
 func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator, blocks int64, blocksPerMicroEpoch int64,
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand) ([][]float64, error) {
 
 	fmt.Printf("Parallel peak detection by micro-epoch...\n")
+	fmt.Printf("Caller tells me there are %d blocks (should be 888,888)\n", blocks)
 
-	epochs := blocks/blocksPerEpoch + 1
-	microEpochs := blocks/blocksPerMicroEpoch + 1
+	epochs := bucketCount(blocks, blocksPerEpoch)
+	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
 	microEpochToPhasePeaks := make([][]float64, microEpochs)
 	microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
+
+	microEpochsToTxos := make([]int64, microEpochs)
+	transactionsInChain := int64(0)
+	blocksInChain := int64(0)
 
 	var completed int64 // atomic counter
 
@@ -475,6 +485,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	if numWorkers > 4 {
 		numWorkers -= 2 // Save some for OS
 	}
+	//numWorkers = 1 // Serial test! I may be some time
 
 	g, ctx := errgroup.WithContext(context.Background())
 	sem := make(chan struct{}, numWorkers)
@@ -504,7 +515,12 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 
 			// Go through the microEpochs in this epoch
 			firstMe := epochID * microEpochsPerEpoch
-			for me := firstMe; me < firstMe+microEpochsPerEpoch; me++ {
+			lastMe := (epochID + 1) * microEpochsPerEpoch // Usually
+			if lastMe > microEpochs {
+				lastMe = microEpochs // Finally (last, possibly partial, epoch)
+			}
+			for me := firstMe; me < lastMe; me++ {
+				txoCount := 0
 				buffer = buffer[:0] // Reset buffer but keep allocated memory
 				firstBlock := epochID*blocksPerEpoch + (me-firstMe)*blocksPerMicroEpoch
 				if firstBlock >= blocks {
@@ -544,6 +560,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 
 				// Go through the blocks in the microEpoch
 				for blockIdx := firstBlock; blockIdx < lastBlock; blockIdx++ {
+					atomic.AddInt64(&blocksInChain, 1)
 					blockHandle, err := handles.BlockHandleByHeight(int64(blockIdx))
 					if err != nil {
 						return err
@@ -557,6 +574,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 						return err
 					}
 					for t := int64(0); t < tCount; t++ {
+						atomic.AddInt64(&transactionsInChain, 1)
 						transHandle, err := block.NthTransaction(t)
 						if err != nil {
 							return err
@@ -581,6 +599,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 						firstTxoOfTrans := txoHandle.TxoHeight()
 
 						for txo, sats := range txoAmounts {
+							txoCount++
 							amount := sats
 							oldCodeTxoIndex := firstTxoOfTrans + int64(txo)
 							if _, ok := celebCodesPerEpoch[epochID][amount]; !ok {
@@ -593,6 +612,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 						}
 					} // for transactions
 				} // for blocks
+				atomic.AddInt64(&microEpochsToTxos[me], int64(txoCount))
 				if len(buffer) < MIN_AMOUNT_COUNT_FOR_ANALYSIS {
 					microEpochToPhasePeaks[me] = nil
 				} else {
@@ -613,6 +633,13 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 		return nil, err
 	}
 
+	txosInChain := int64(0)
+	for i := int64(0); i < microEpochs; i++ {
+		txosInChain += microEpochsToTxos[i]
+	}
+	fmt.Printf("Considered %d blocks (should be 888,888\n", blocksInChain)
+	fmt.Printf("Considered %d transactions (should be 1169006472)\n", transactionsInChain)
+	fmt.Printf("Considered %d txos (should be 3,244,970,783)\n", txosInChain)
 	fmt.Println("\n Peak detection done.")
 	return microEpochToPhasePeaks, nil
 }

@@ -327,6 +327,10 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	return finalResidualsByExp, finalCombinedFreqs
 }
 
+func bucketCount(beans int64, beansPerBucket int64) int64 {
+	return (beans + beansPerBucket - 1) / beansPerBucket
+}
+
 const MAX_PHASE_PEAKS = 1000
 const CSV_COLUMNS = 3
 
@@ -343,7 +347,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 	completed := int64(0) // Atomic int
 
-	microEpochs := blocks/int64(blocksPerMicroEpoch) + 1
+	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
 
 	numWorkers := runtime.NumCPU()
 	if numWorkers > 4 {

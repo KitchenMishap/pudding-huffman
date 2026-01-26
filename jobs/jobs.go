@@ -107,6 +107,10 @@ func TruncateMapWithEscapeCode(all map[int64]int64, maxCodes int, captureCoverag
 	return some, reasonFlag
 }
 
+func bucketCount(beans int64, beansPerBucket int64) int64 {
+	return (beans + beansPerBucket - 1) / beansPerBucket
+}
+
 // Numbers up to 21 million btc (in sats) are unsafe to use as an escape code, because a txo amount could match.
 // So we go to 22 million (times 100,000,000 sats) and make it -ve for good measure
 const ESCAPE_VALUE = -2200000000000000
@@ -143,7 +147,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 
 	const blocksPerEpoch = 144 * 7 // Roughly a week
 	const blocksPerMicroEpoch = 6  // Roughly an hour
-	numEpochs := int64(blocks/blocksPerEpoch + 1)
+	numEpochs := bucketCount(blocks, blocksPerEpoch)
 	numWorkers := int(runtime.NumCPU())
 	if numWorkers > 4 {
 		numWorkers -= 2 // Some spare for the OS
@@ -328,10 +332,44 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Identifying fiat peaks (parallel) **==")
 
-	microEpochs := blocks/blocksPerMicroEpoch + 1
+	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
 	microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch, epochToCelebCodes, blocksPerEpoch, deterministic)
 	if err != nil {
 		return err
+	}
+
+	/*
+		countsPerWeek := make([]int, numEpochs)
+		microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
+		weeklyTotalsOfLog := make([]float64, numEpochs)
+		for meID := 0; meID < int(microEpochs); meID++ {
+			week := meID / microEpochsPerEpoch
+			if len(microEpochToPhasePeaks[meID]) > 0 {
+				weeklyTotalsOfLog[week] += microEpochToPhasePeaks[meID][0]
+				countsPerWeek[week]++
+			}
+		}
+		for week, totLog := range weeklyTotalsOfLog {
+			year := 2009 + math.Round(100.0*(float64(week)/52.0))/100.0
+			avLog := totLog / float64(microEpochsPerEpoch)
+			digits := int(1000 * math.Pow(10, avLog))
+			if countsPerWeek[week] > 0 {
+				fmt.Printf("%.2f, %d\n", year, digits)
+			}
+		}*/
+
+	//microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
+	for meID := 0; meID < int(microEpochs); meID++ {
+		hourCounter := meID
+		TimeOfDay := meID % 24
+		year := 2009 + math.Round(100.0*(float64(hourCounter)/52.0))/100.0
+		if len(microEpochToPhasePeaks[meID]) > 0 {
+			if TimeOfDay == 0 { // "One" timezone somewhere in the world
+				log := microEpochToPhasePeaks[meID][0]
+				digits := int(1000 * math.Pow(10, log))
+				fmt.Printf("%.2f, %d\n", year, digits)
+			}
+		}
 	}
 
 	for meID := 0; meID < int(microEpochs); meID++ {
