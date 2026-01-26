@@ -26,17 +26,24 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 		}
 	}
 
-	onePeak := findEpochPeaks(amounts, 1, deterministic)
-	if len(onePeak) == 0 {
+	fivePeaks := findEpochPeaks(amounts, 5, deterministic)
+	if len(fivePeaks) < 5 {
 		return nil
 	}
-	fundamentalPhase := onePeak[0]
-	betterFundamental, _ := FindBestAnchor(phases, fundamentalPhase)
+	bestPeak := fivePeaks[0]
+	_, bestBadness := FindBestAnchor(phases, bestPeak)
+	for _, peak := range fivePeaks {
+		peak, badness := FindBestAnchor(phases, peak)
+		if badness < bestBadness {
+			bestBadness = badness
+			bestPeak = peak
+		}
+	}
 
 	result := []float64{}
 	// fundamental times logs representing 1.0, 1.1, 1.2, ..., 9.9
 	for i := float64(1.00); i < 10.00; i += 0.1 {
-		result = append(result, math.Mod(betterFundamental+math.Log10(i), 1))
+		result = append(result, math.Mod(bestPeak+math.Log10(i), 1))
 	}
 
 	// OR... Just the plain 1,2,5

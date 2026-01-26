@@ -362,11 +362,18 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	for meID := 0; meID < int(microEpochs); meID++ {
 		hourCounter := meID
 		TimeOfDay := meID % 24
-		year := 2009 + math.Round(100.0*(float64(hourCounter)/52.0))/100.0
+		year := 2009 + math.Round(100.0*(float64(hourCounter)/(52.0*7.0*24.0)))/100.0
 		if len(microEpochToPhasePeaks[meID]) > 0 {
 			if TimeOfDay == 0 { // "One" timezone somewhere in the world
-				log := microEpochToPhasePeaks[meID][0]
-				digits := int(1000 * math.Pow(10, log))
+				L := microEpochToPhasePeaks[meID][0]
+				val := math.Pow(10, -L)
+				for val < 1000 {
+					val *= 10
+				}
+				for val >= 10000 {
+					val /= 10
+				}
+				digits := int(val)
 				fmt.Printf("%.2f, %d\n", year, digits)
 			}
 		}
