@@ -145,8 +145,10 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Creating the celebrity histograms per epoch **==")
 
-	const blocksPerEpoch = 144 * 7 // Roughly a week
-	const blocksPerMicroEpoch = 6  // Roughly an hour
+	//const blocksPerEpoch = 144 * 7 // Roughly a week
+	//const blocksPerMicroEpoch = 6  // Roughly an hour
+	const blocksPerEpoch = 144 * 28    // Roughly a month
+	const blocksPerMicroEpoch = 6 * 24 // Roughly a day
 	numEpochs := bucketCount(blocks, blocksPerEpoch)
 	numWorkers := int(runtime.NumCPU())
 	if numWorkers > 4 {
@@ -333,38 +335,31 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Identifying fiat peaks (parallel) **==")
 
 	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
-	microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch, epochToCelebCodes, blocksPerEpoch, deterministic, nil)
-	if err != nil {
-		return err
-	}
 
-	/*
-		countsPerWeek := make([]int, numEpochs)
-		microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
-		weeklyTotalsOfLog := make([]float64, numEpochs)
+	var microEpochToPhasePeaks [][]float64
+	var microEpochToPeakStrengths [][3]int64
+	for pass := 0; pass < 2; pass++ {
+		fmt.Printf("======================= Pass %d ===========", pass)
+
+		var exclude *[2000000000]byte = nil
+
+		microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch, epochToCelebCodes, blocksPerEpoch, deterministic, exclude)
+		if err != nil {
+			return err
+		}
+
+		f, err := os.Create("FourDigits.csv")
+		if err != nil {
+			panic("couldn't open file")
+		}
+
+		//microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
 		for meID := 0; meID < int(microEpochs); meID++ {
-			week := meID / microEpochsPerEpoch
+			dayCounter := meID
+			//TimeOfDay := meID % 24
+			year := 2009 + math.Round(100.0*(float64(dayCounter)/(52.1775*7.0)))/100.0
 			if len(microEpochToPhasePeaks[meID]) > 0 {
-				weeklyTotalsOfLog[week] += microEpochToPhasePeaks[meID][0]
-				countsPerWeek[week]++
-			}
-		}
-		for week, totLog := range weeklyTotalsOfLog {
-			year := 2009 + math.Round(100.0*(float64(week)/52.0))/100.0
-			avLog := totLog / float64(microEpochsPerEpoch)
-			digits := int(1000 * math.Pow(10, avLog))
-			if countsPerWeek[week] > 0 {
-				fmt.Printf("%.2f, %d\n", year, digits)
-			}
-		}*/
-
-	//microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
-	for meID := 0; meID < int(microEpochs); meID++ {
-		hourCounter := meID
-		TimeOfDay := meID % 24
-		year := 2009 + math.Round(100.0*(float64(hourCounter)/(52.0*7.0*24.0)))/100.0
-		if len(microEpochToPhasePeaks[meID]) > 0 {
-			if TimeOfDay == 0 { // "One" timezone somewhere in the world
+				//				if TimeOfDay == 0 { // "One" timezone somewhere in the world
 				L := microEpochToPhasePeaks[meID][0]
 				val := math.Pow(10, -L)
 				for val < 1000 {
@@ -374,117 +369,94 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 					val /= 10
 				}
 				digits := int(val)
-				fmt.Printf("%.2f, %d\n", year, digits)
+				fmt.Fprintf(f, "%.2f, %d\n", year, digits)
+				//				}
 			}
 		}
-	}
+		f.Close()
 
-	for meID := 0; meID < int(microEpochs); meID++ {
-		// Sort the peaks for this epoch so Peak 0 is always the smallest phase
-		sort.Float64s(microEpochToPhasePeaks[meID])
-	}
-
-	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Build residuals map (now parallel, now per EXP) **==")
-
-	residualsMapByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
-
-	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
-
-	fmt.Printf("Huffman tree for combined peak and harmonic selection\n")
-	combinedTruncated, reason := TruncateMapWithEscapeCode(combinedFreq, 124, 1.0, ESCAPE_VALUE)
-	huffCombinedRoot := huffman.BuildHuffmanTree(combinedTruncated)
-	combinedCodes := make(map[int64]huffman.BitCode)
-	huffman.GenerateBitCodes(huffCombinedRoot, 0, 0, combinedCodes)
-	fmt.Printf("Reason (if any) why frequencies map was truncated\n")
-	if reason == 0 {
-		println(REASON_STRING_0)
-	}
-	if reason == 1 {
-		println(REASON_STRING_1)
-	}
-	if reason == 2 {
-		println(REASON_STRING_2)
-	}
-
-	fmt.Printf("Huffman trees for clockPhase residuals AT EACH EXP MAGNITUDE\n")
-	residualCodesByExp := make([]map[int64]huffman.BitCode, MAX_BASE_10_EXP)
-	reasonHist = make(map[int]int64)
-	for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
-		// Build a specific tree for this exponent
-		// Lets pick a max number of codes.
-		maxCodes := GetSensibleMaxCodes(exp)
-		residualTruncated, reason := TruncateMapWithEscapeCode(residualsMapByExp[exp], maxCodes, 0.99, ESCAPE_VALUE)
-		reasonHist[reason]++
-		huffResidualRoot := huffman.BuildHuffmanTree(residualTruncated)
-		residualCodesByExp[exp] = make(map[int64]huffman.BitCode)
-		huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesByExp[exp])
-	}
-	fmt.Printf("Statistics of why each map was truncated before being sent for Huffman encoding:\n")
-	fmt.Printf("%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
-	fmt.Printf("%s: %d occurances\n", REASON_STRING_1, reasonHist[1])
-	fmt.Printf("%s: %d occurances\n", REASON_STRING_2, reasonHist[2])
-
-	fmt.Printf("Huffman tree for literal magnitudes...\n")
-	magnitudesMap := make(map[int64]int64)
-	for mag := int64(0); mag <= 64; mag++ {
-		freq := magFreqs[mag]
-		magnitudesMap[mag] = freq
-	}
-	huffMagnitudeRoot := huffman.BuildHuffmanTree(magnitudesMap)
-	magnitudeCodes := make(map[int64]huffman.BitCode)
-	huffman.GenerateBitCodes(huffMagnitudeRoot, 0, 0, magnitudeCodes)
-
-	fmt.Printf("Huffman tree for base 10 exps...\n")
-	expsMap := make(map[int64]int64)
-	for exp := int64(0); exp < MAX_BASE_10_EXP; exp++ {
-		freq := expFreqs[exp]
-		expsMap[exp] = freq
-	}
-	huffExpRoot := huffman.BuildHuffmanTree(expsMap)
-	expCodes := make(map[int64]huffman.BitCode)
-	huffman.GenerateBitCodes(huffExpRoot, 0, 0, expCodes)
-
-	elapsed = time.Since(startTime)
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression with fiat peaks **==")
-
-	result, microEpochToPeakStrengths, transToExcludedOutputs := compress.ParallelSimulateCompressionWithKMeans(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, expCodes, residualCodesByExp, magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
-
-	p = message.NewPrinter(language.English) // For commas between thousands
-	p.Printf("TotalBits: %d\n", result.TotalBits)
-	p.Printf("BTC Celebrity hits: %d\n", result.CelebrityHits)
-	p.Printf("Fiat Ghost hits: %d\n", result.KMeansHits)
-	p.Printf("Literal hits: %d\n", result.LiteralHits)
-	p.Printf("Rest hits: %d\n", result.RestHits)
-	elapsed = time.Since(startTime)
-
-	microEpochToPhasePeaks, err = kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch, epochToCelebCodes, blocksPerEpoch, deterministic, transToExcludedOutputs)
-	if err != nil {
-		return err
-	}
-	for meID := 0; meID < int(microEpochs); meID++ {
-		hourCounter := meID
-		TimeOfDay := meID % 24
-		year := 2009 + math.Round(100.0*(float64(hourCounter)/(52.0*7.0*24.0)))/100.0
-		if len(microEpochToPhasePeaks[meID]) > 0 {
-			if TimeOfDay == 0 { // "One" timezone somewhere in the world
-				L := microEpochToPhasePeaks[meID][0]
-				val := math.Pow(10, -L)
-				for val < 1000 {
-					val *= 10
-				}
-				for val >= 10000 {
-					val /= 10
-				}
-				digits := int(val)
-				fmt.Printf("%.2f, %d\n", year, digits)
-			}
+		for meID := 0; meID < int(microEpochs); meID++ {
+			// Sort the peaks for this epoch so Peak 0 is always the smallest phase
+			sort.Float64s(microEpochToPhasePeaks[meID])
 		}
+
+		elapsed = time.Since(startTime)
+		fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Build residuals map (now parallel, now per EXP) **==")
+
+		residualsMapByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
+
+		elapsed = time.Since(startTime)
+		fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
+
+		fmt.Printf("Huffman tree for combined peak and harmonic selection\n")
+		combinedTruncated, reason := TruncateMapWithEscapeCode(combinedFreq, 124, 1.0, ESCAPE_VALUE)
+		huffCombinedRoot := huffman.BuildHuffmanTree(combinedTruncated)
+		combinedCodes := make(map[int64]huffman.BitCode)
+		huffman.GenerateBitCodes(huffCombinedRoot, 0, 0, combinedCodes)
+		fmt.Printf("Reason (if any) why frequencies map was truncated\n")
+		if reason == 0 {
+			println(REASON_STRING_0)
+		}
+		if reason == 1 {
+			println(REASON_STRING_1)
+		}
+		if reason == 2 {
+			println(REASON_STRING_2)
+		}
+
+		fmt.Printf("Huffman trees for clockPhase residuals AT EACH EXP MAGNITUDE\n")
+		residualCodesByExp := make([]map[int64]huffman.BitCode, MAX_BASE_10_EXP)
+		reasonHist = make(map[int]int64)
+		for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
+			// Build a specific tree for this exponent
+			// Lets pick a max number of codes.
+			maxCodes := GetSensibleMaxCodes(exp)
+			residualTruncated, reason := TruncateMapWithEscapeCode(residualsMapByExp[exp], maxCodes, 0.99, ESCAPE_VALUE)
+			reasonHist[reason]++
+			huffResidualRoot := huffman.BuildHuffmanTree(residualTruncated)
+			residualCodesByExp[exp] = make(map[int64]huffman.BitCode)
+			huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesByExp[exp])
+		}
+		fmt.Printf("Statistics of why each map was truncated before being sent for Huffman encoding:\n")
+		fmt.Printf("%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
+		fmt.Printf("%s: %d occurances\n", REASON_STRING_1, reasonHist[1])
+		fmt.Printf("%s: %d occurances\n", REASON_STRING_2, reasonHist[2])
+
+		fmt.Printf("Huffman tree for literal magnitudes...\n")
+		magnitudesMap := make(map[int64]int64)
+		for mag := int64(0); mag <= 64; mag++ {
+			freq := magFreqs[mag]
+			magnitudesMap[mag] = freq
+		}
+		huffMagnitudeRoot := huffman.BuildHuffmanTree(magnitudesMap)
+		magnitudeCodes := make(map[int64]huffman.BitCode)
+		huffman.GenerateBitCodes(huffMagnitudeRoot, 0, 0, magnitudeCodes)
+
+		fmt.Printf("Huffman tree for base 10 exps...\n")
+		expsMap := make(map[int64]int64)
+		for exp := int64(0); exp < MAX_BASE_10_EXP; exp++ {
+			freq := expFreqs[exp]
+			expsMap[exp] = freq
+		}
+		huffExpRoot := huffman.BuildHuffmanTree(expsMap)
+		expCodes := make(map[int64]huffman.BitCode)
+		huffman.GenerateBitCodes(huffExpRoot, 0, 0, expCodes)
+
+		elapsed = time.Since(startTime)
+		fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression with fiat peaks **==")
+
+		result, microEpochToPeakStrengths, exclude = compress.ParallelSimulateCompressionWithKMeans(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, expCodes, residualCodesByExp, magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
+
+		p = message.NewPrinter(language.English) // For commas between thousands
+		p.Printf("TotalBits: %d\n", result.TotalBits)
+		p.Printf("BTC Celebrity hits: %d\n", result.CelebrityHits)
+		p.Printf("Fiat Ghost hits: %d\n", result.KMeansHits)
+		p.Printf("Literal hits: %d\n", result.LiteralHits)
+		p.Printf("Rest hits: %d\n", result.RestHits)
+		elapsed = time.Since(startTime)
+
+		fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Finished Pass **==")
 	}
-
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Finished **==")
-
 	exportOracleCSV("Oracle.csv", microEpochToPhasePeaks, microEpochToPeakStrengths)
 
 	return nil
