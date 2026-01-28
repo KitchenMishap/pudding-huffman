@@ -139,7 +139,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	blocks := latestBlock.Height() + 1
 
 	elapsed = time.Since(startTime)
-	sJob := "Creating the celebrity histograms per epoch (PARALLEL)"
+	sJob := "Creating the celebrity histograms per epoch (PARALLEL by epoch)"
 	tJob := time.Now()
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
 
@@ -254,7 +254,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	}
 
 	jobElapsed := time.Since(tJob)
-	fmt.Printf("\t%s: Job Took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
+	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Huffman per Epoch (now parallel) **==")
@@ -307,10 +307,10 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	close(epochChan2)
 	wg.Wait()
 
-	fmt.Printf("Statistics of why each map was truncated before being sent for Huffman encoding:\n")
-	fmt.Printf("%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
-	fmt.Printf("%s: %d occurances\n", REASON_STRING_1, reasonHist[1])
-	fmt.Printf("%s: %d occurances\n", REASON_STRING_2, reasonHist[2])
+	fmt.Printf("\tStatistics of why each map was truncated before being sent for Huffman encoding:\n")
+	fmt.Printf("\t%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
+	fmt.Printf("\t%s: %d occurances\n", REASON_STRING_1, reasonHist[1])
+	fmt.Printf("\t%s: %d occurances\n", REASON_STRING_2, reasonHist[2])
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression **==")
@@ -319,8 +319,8 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 		return err
 	}
 
-	fmt.Printf("Celebrity hits: %d\n", result.CelebrityHits)
-	fmt.Printf("Literal hits: %d\n", result.LiteralHits)
+	fmt.Printf("\tCelebrity hits: %d\n", result.CelebrityHits)
+	fmt.Printf("\tLiteral hits: %d\n", result.LiteralHits)
 
 	elapsed = time.Since(startTime)
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Identifying fiat peaks (parallel) **==")
@@ -332,7 +332,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 
 	var exclude *[2000000000]byte = nil
 	for pass := 0; pass < 2; pass++ {
-		fmt.Printf("======================= Pass %d ===========", pass)
+		fmt.Printf("\t==== Pass %d ====\n", pass)
 
 		microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch, epochToCelebCodes, blocksPerEpoch, deterministic, exclude)
 		if err != nil {
@@ -375,7 +375,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 
 		if true {
 			elapsed = time.Since(startTime)
-			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Build residuals map (now parallel, now per EXP) **==")
+			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "Build residuals map (PARALLEL per exp) ")
 
 			residualsMapByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
 
@@ -411,10 +411,10 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 				residualCodesByExp[exp] = make(map[int64]huffman.BitCode)
 				huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesByExp[exp])
 			}
-			fmt.Printf("Statistics of why each map was truncated before being sent for Huffman encoding:\n")
-			fmt.Printf("%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
-			fmt.Printf("%s: %d occurances\n", REASON_STRING_1, reasonHist[1])
-			fmt.Printf("%s: %d occurances\n", REASON_STRING_2, reasonHist[2])
+			fmt.Printf("\tStatistics of why each map was truncated before being sent for Huffman encoding:\n")
+			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
+			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_1, reasonHist[1])
+			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_2, reasonHist[2])
 
 			fmt.Printf("Huffman tree for literal magnitudes...\n")
 			magnitudesMap := make(map[int64]int64)

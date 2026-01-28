@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"runtime"
 	"sync/atomic"
+	"time"
 )
 
 // Switch between float32 and float64 here
@@ -343,8 +344,9 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand,
 	transToExcludedOutput *[2000000000]byte) ([][]float64, error) {
 
-	fmt.Printf("Parallel peak detection by micro-epoch...\n")
-	fmt.Printf("Caller tells me there are %d blocks (should be 888,888)\n", blocks)
+	sJob := "Peak detection: PARALLEL by micro-epoch"
+	fmt.Printf("%s\n", sJob)
+	tJob := time.Now()
 
 	epochs := bucketCount(blocks, blocksPerEpoch)
 	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
@@ -518,8 +520,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 
 			// Report progress on completion of epoch
 			done := atomic.AddInt64(&completed, 1)
-			fmt.Printf("\r> Peak detection progress: [%d/%d] epochs (%.1f%%)    ",
-				done, epochs, float64(done)/float64(epochs)*100)
+			fmt.Printf("\r\tProgress %.1f%%    ", float64(100*done)/float64(epochs))
 
 			return nil
 		})
@@ -528,13 +529,16 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 		return nil, err
 	}
 
+	fmt.Printf("\n")
+	jobElapsed := time.Since(tJob)
+	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
+
 	txosInChain := int64(0)
 	for i := int64(0); i < microEpochs; i++ {
 		txosInChain += microEpochsToTxos[i]
 	}
-	fmt.Printf("Considered %d blocks (should be 888,888\n", blocksInChain)
-	fmt.Printf("Considered %d transactions (should be 1169006472)\n", transactionsInChain)
-	fmt.Printf("Considered %d txos (should be 3,244,970,783)\n", txosInChain)
-	fmt.Println("\n Peak detection done.")
+	fmt.Printf("\tConsidered %d blocks (should be 888,888\n", blocksInChain)
+	fmt.Printf("\tTODO! Considered %d transactions (should be 1169006472)\n", transactionsInChain)
+	fmt.Printf("\tTODO! Considered %d txos (should be 3,244,970,783)\n", txosInChain)
 	return microEpochToPhasePeaks, nil
 }

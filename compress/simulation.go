@@ -32,7 +32,7 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	max_base_10_exp int) (CompressionStats, []int64, []int64, error) {
 
-	sJob := "Stage 1: ParallelAmountStatistics() (PARALLEL BY BLOCK)"
+	sJob := "Stage 1: ParallelAmountStatistics() (PARALLEL by block)"
 	fmt.Printf("%s\n", sJob)
 	tJob := time.Now()
 
@@ -123,8 +123,8 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 					}
 				} // For transaction
 				done := atomic.AddUint64(&blocksDone, 1)
-				if done%10000 == 0 {
-					fmt.Printf("\rProgress: %.1f   ", float64(done*100)/float64(blocks))
+				if done%100000 == 0 || done == uint64(blocks) {
+					fmt.Printf("\r\tProgress: %.1f   ", float64(done*100)/float64(blocks))
 				}
 			} // For block
 			resultsChan <- local
@@ -143,8 +143,6 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 			}
 		}
 	}()
-	fmt.Printf("\n")
-
 	// Wait for completion and handle the error
 	if err := g.Wait(); err != nil {
 		return CompressionStats{}, nil, nil, err
@@ -152,9 +150,9 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 
 	wg.Wait()
 	close(resultsChan)
-
+	fmt.Printf("\n")
 	jobElapsed := time.Since(tJob)
-	fmt.Printf("%s: Job Took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
+	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
 	// --- REDUCE PHASE ---
 	sJob = "Stage 1: ParallelAmountStatistics() (SERIAL Reduction)"
@@ -178,7 +176,7 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	}
 
 	jobElapsed = time.Since(tJob)
-	fmt.Printf("%s: Job Took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
+	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
 	return finalStats, finalMags, finalExpFreqs, nil
 }
@@ -192,9 +190,11 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	max_base_10_exp int) ([20]map[int64]int64, // First result: outer array index is the exponent (number of decimal zeros). Inner map is freq for each possible residual
 	map[int64]int64) { // Second result: frequencies of combined peak/harmonic index
 
-	fmt.Printf("Stage 1.5, gather frequencies of residuals by exp magnitude\n")
+	tJob := time.Now()
+	sJob := "Stage 1.5, gather frequencies of residuals by exp magnitude (PARALLEL by block)"
+	fmt.Printf("%s\n", sJob)
 
-	fmt.Printf("Parallel phase...\n")
+	fmt.Printf("\tParallel phase...\n")
 	workersDivider := 1
 	numWorkers := runtime.NumCPU() / workersDivider
 	if numWorkers > 8 {
@@ -217,6 +217,8 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 
 	// Create an errgroup and a context
 	g, ctx := errgroup.WithContext(context.Background())
+
+	blocksDone := int64(0) // atomic
 
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
@@ -291,8 +293,10 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 							local.localResidualsByExp[e][r]++
 						}
 					}
-				}
-			}
+				} // for tranaction
+				done := atomic.AddInt64((*int64)(&blocksDone), 1)
+				fmt.Printf("\r\tProgress %5.1f   ", float64(done*100)/float64(blocksDone))
+			} // for block
 			resultsChan <- local
 			return nil
 		})
@@ -313,8 +317,13 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	wg.Wait()
 	close(resultsChan)
 
-	serialStartTime := time.Now()
-	fmt.Printf("Starting Reduce phase (serial)...\n")
+	fmt.Printf("\n")
+	jobElapsed := time.Since(tJob)
+	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
+
+	tJob = time.Now()
+	sJob = "\t(Serial Reduction)"
+	fmt.Printf("%s\n", sJob)
 
 	if max_base_10_exp != 20 {
 		panic("You changed a constant!")
@@ -339,8 +348,8 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 		}
 	}
 
-	elapsed := time.Since(serialStartTime)
-	fmt.Printf("Reduce phase (serial)... (alone) took [%5.1f min]\n", elapsed.Minutes())
+	jobElapsed = time.Since(tJob)
+	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
 	return finalResidualsByExp, finalCombinedFreqs
 }
@@ -553,9 +562,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 				// Report progress on completion
 				done := atomic.AddInt64(&completed, 1)
-				if done%1000 == 0 || done == int64(blocks) {
-					fmt.Printf("\r> Progress: [%d/%d] blocks (%.1f%%)    ",
-						done, blocks, float64(done)/float64(blocks)*100)
+				if done%10000 == 0 || done == blocks {
+					fmt.Printf("\r\tProgress: %.1f%%    ", float64(100*done)/float64(blocks))
 				}
 			}
 			resultsChan <- local
