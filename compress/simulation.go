@@ -383,6 +383,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	podiumForCelebrities := huffman.NewPodium()
 	podiumForGhosts := huffman.NewPodium()
 	podiumForRest := huffman.NewPodium()
+	podiumForEverything := huffman.NewPodium()
 
 	completed := int64(0) // Atomic int
 
@@ -673,12 +674,17 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 		}
 	}
 
-	fmt.Printf("Top 5 Literals:\n")
-	podiumForLiterals.Rank(5)
-	fmt.Printf("Top 5 Celebrities:\n")
-	podiumForCelebrities.Rank(5)
-	fmt.Printf("Top 5 Ghosts:\n")
-	podiumForGhosts.Rank(5)
+	n := 10
+	fmt.Printf("Top %d OVERALL codes (Literal, Celebrity, Ghost, TheRest\n", n)
+	podiumForEverything.Rank(n)
+	fmt.Printf("Top %d Literal codes:\n", n)
+	podiumForLiterals.Rank(n)
+	fmt.Printf("Top %d Celebrity codes:\n", n)
+	podiumForCelebrities.Rank(n)
+	fmt.Printf("Top %d Ghost codes:\n", n)
+	podiumForGhosts.Rank(n)
+	fmt.Printf("Top %d TheRest codess:\n", n)
+	podiumForGhosts.Rank(n)
 
 	return globalStats, globalStrengths, &transToExcludedOutput
 }
