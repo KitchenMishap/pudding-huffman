@@ -12,6 +12,7 @@ import (
 	"math/bits"
 	"math/rand"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,10 +20,14 @@ import (
 
 type CompressionStats struct {
 	TotalBits     uint64
-	CelebrityHits uint64
-	KMeansHits    uint64
 	LiteralHits   uint64
+	LiteralBits   uint64
+	CelebrityHits uint64
+	CelebrityBits uint64
+	GhostHits     uint64
+	GhostBits     uint64
 	RestHits      uint64
+	RestBits      uint64
 }
 
 func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
@@ -107,12 +112,12 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 
 						// Stage 1: Celebrity
 						if _, ok := epochToCelebCodes[epochID][amount]; ok {
-							local.stats.CelebrityHits++
+							//local.stats.CelebrityHits++	No statistics in this run!
 							continue
 						}
 
 						// (The new) Stage 2: Literal (Initial Pass)
-						local.stats.LiteralHits++
+						//local.stats.LiteralHits++			No statistics in this run!
 						local.mags[bits.Len64(uint64(amount))]++ // Increment for EVERY amount including zero
 						if amount > 0 {                          // Guard against log10(0)
 							exponent := int(math.Floor(math.Log10(float64(amount))))
@@ -164,8 +169,9 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	finalExpFreqs := make([]int64, max_base_10_exp)
 
 	for res := range resultsChan {
-		finalStats.CelebrityHits += res.stats.CelebrityHits
-		finalStats.LiteralHits += res.stats.LiteralHits
+		// No statistics for this run!
+		//finalStats.CelebrityHits += res.stats.CelebrityHits
+		//finalStats.LiteralHits += res.stats.LiteralHits
 
 		for i := 0; i < 65; i++ {
 			finalMags[i] += res.mags[i]
@@ -372,6 +378,12 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	combinedCodes map[int64]huffman.BitCode,
 	microEpochToPhasePeaks [][]float64) (CompressionStats, [][CSV_COLUMNS]int64, *[2000000000]byte) {
 
+	mutex := &sync.Mutex{}
+	podiumForLiterals := huffman.NewPodium()
+	podiumForCelebrities := huffman.NewPodium()
+	podiumForGhosts := huffman.NewPodium()
+	podiumForRest := huffman.NewPodium()
+
 	completed := int64(0) // Atomic int
 
 	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
@@ -456,21 +468,37 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 					// We have all the outputs and the fees for the transaction
 					// Work out the bit cost for every one of these (BEFORE we choose which is most bit-expensive)
-					outputsAndFeesBitcosts := make([]int64, len(outputsAndFeesAmounts))
-					outputsAndFeesEncodingChoice := make([]int64, len(outputsAndFeesAmounts))
+					bigCode := huffman.BitCode{0xFFFFFFFFFFFFFFFF, 64}
+					celebSelector := huffman.BitCode{0b00, 2}
+					ghostSelector := huffman.BitCode{0b01, 2}
+					literalSelector := huffman.BitCode{0b10, 2}
+					restSelector := huffman.BitCode{0b11, 2}
+
+					outputsAndFeesCodes := make([]huffman.BitCode, len(outputsAndFeesAmounts))
+					outputsAndFeesEncodingChoice := make([]huffman.BitCode, len(outputsAndFeesAmounts))
+					outputsAndFeesQuotes := make([]string, len(outputsAndFeesAmounts))
 					for c, amount := range outputsAndFeesAmounts {
-						// Stage 1: Celebrity cost (cost of MAXINT means celebrity status not available)
+
+						// Stage 1: Celebrity cost
 						// Intended to capture common numbers of satoshis like 50BTC and 0 sats
 						// The celebrity codes are now PER EPOCH
-						celebCost := int64(math.MaxInt)
+						celebCode := bigCode
+						celebQuote := "?"
 						if aCode, ok := epochToCelebCodes[epochID][amount]; ok {
-							celebCost = int64(aCode.Length)
+							celebCode = huffman.JoinBitCodes(celebSelector, aCode)
+							if amount >= 100000 {
+								celebQuote = "Celeb BTC amount: " + strconv.FormatFloat(float64(amount)/100000000, 'f', 8, 64) + " BTC"
+							} else {
+								celebQuote = "Celeb BTC amount: " + strconv.FormatInt(amount, 10) + " sats"
+							}
 						}
 
 						// Stage 2: Ghost cost (maxint means ghost status not available)
 						// Intended to capture the "ghosts" of round numbers in fiat-land, when they are converted to satoshis
-						ghostCost := int64(math.MaxInt)
-						// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
+						ghostCode := bigCode
+						ghostQuote := "?"
+						// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
+						// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
 						if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && len(microEpochToPhasePeaks[microEpochID]) > 0 {
 							e, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
 							if rCode, ok := residualCodesByExp[e][r]; ok {
@@ -478,83 +506,111 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								//ghostCost += 2                          // And some bits to store the harmonic
 								// Now we have a huffman code for the combination of peak index and harmonic index.
 								// This is the initial cost...
-								ghostCost = int64(combinedCodes[int64(3*peakIdx+harmonic)].Length)
+								combinedCode := combinedCodes[int64(3*peakIdx+harmonic)]
 								if peakIdx < CSV_COLUMNS {
 									local.peakStrengths[epochID][peakIdx]++ // Yes this IS supposed to be here. It's for oracle price prediction
 								}
 								if eCode, ok := expCodes[int64(e)]; ok {
-									ghostCost += int64(eCode.Length) // Secondly there are some bits to encode the number of decimal points (exp)
+									ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
+									// 4 digit peak value in sats
+									digitsSats := int64(math.Round(math.Pow(10, microEpochToPhasePeaks[microEpochID][peakIdx]) * 1000))
+									ghostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
+									ghostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
+									ghostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
+									ghostQuote += strconv.FormatInt(int64(e-3), 10) + " and residual "
+									ghostQuote += strconv.FormatInt(r, 10)
 								} else {
 									panic("missing exp code")
 								}
-								ghostCost += int64(rCode.Length) // Thirdly there are some bits to encode the residual distance from the peak
 							}
 						}
 
 						// Stage 3: Magnitude-encoded Literal cost. Always available.
+						literalCode := bigCode
+						literalQuote := "?"
 						mag := int64(bits.Len64(uint64(amount))) // Number of bits in the literal (after the binary 0's)
 						// COULD BE 0 BITS! BE AWARE!
 						// One bit saving is clever. Because we can assume "0" is a celebrity (in fact we found that
 						// it's the most popular celebrity!), we know that amount is non zero. So we don't need
 						// to store mag bits, because we ALWAYS ALREADY KNOW that the first bit will be a 1. Why store it?
 						const oneBitSaving = 1
-						literalCost := int64(magnitudeCodes[mag].Length) // A huffman code telling us the magnitude (number of bits)
+						magCode := magnitudeCodes[mag] // A huffman code telling us the magnitude (number of bits)
+						var bts uint64
+						var bitsCount int
+						var bitsCode huffman.BitCode
 						if mag > 0 {
-							literalCost += int64(mag) - oneBitSaving // The bits themselves (minus the clever one bit saving)
+							bts = uint64(amount ^ (1 << (mag - 1))) // Take off the clever missing 1
+							bitsCount = int(mag - oneBitSaving)
+							bitsCode = huffman.BitCode{bts, bitsCount}
 						} else {
 							// The magnitude is zero. The number is zero bits long. The NUMBER IS ZERO. There are no bits
-							literalCost += 0
+							bitsCode = huffman.BitCode{0, 0}
 						}
-
-						selectorCost := int64(2) // Two bits to select between (00) Literal, (01) Celebrity, (10) Ghost, and (11) The "Work it out yourself" code
+						literalCode = huffman.JoinBitCodes(literalSelector, magCode, bitsCode)
+						literalQuote = "Literal: " + strconv.FormatInt(amount, 10) + " sats"
 
 						// Choose whichever choice of encoding is cheapest
-						choice := int64(0)
-						chosenCost := literalCost
-						if celebCost < chosenCost {
-							choice = 1
-							chosenCost = celebCost
+						choice := literalSelector
+						chosenCode := literalCode
+						chosenQuote := literalQuote
+						if celebCode.Length < chosenCode.Length {
+							choice = celebSelector
+							chosenCode = celebCode
+							chosenQuote = celebQuote
 						}
-						if ghostCost < chosenCost {
-							choice = 2
-							chosenCost = ghostCost
+						if ghostCode.Length < chosenCode.Length {
+							choice = ghostSelector
+							chosenCode = ghostCode
+							chosenQuote = ghostQuote
 						}
 
-						outputsAndFeesBitcosts[c] = selectorCost + chosenCost
+						outputsAndFeesCodes[c] = chosenCode
 						outputsAndFeesEncodingChoice[c] = choice
+						outputsAndFeesQuotes[c] = chosenQuote
 					}
 					// Find the most costly output (or fees) in terms of bitcount
-					mostExpensive := int64(0)
+					mostExpensive := int(0)
 					loser := -1
-					for c, cost := range outputsAndFeesBitcosts {
-						if cost > mostExpensive {
-							mostExpensive = cost
+					for c, code := range outputsAndFeesCodes {
+						if code.Length > mostExpensive {
+							mostExpensive = code.Length
 							loser = c
 						}
 					}
-					outputsAndFeesBitcosts[loser] = 2       // To encode "11" code
-					outputsAndFeesEncodingChoice[loser] = 3 // 11 in accordance with the prophecy
+					outputsAndFeesCodes[loser] = restSelector // Nothing else is needed for this output!
+					outputsAndFeesEncodingChoice[loser] = restSelector
+					outputsAndFeesQuotes[loser] = "Rest: You can work out this amount from the rest of the transaction"
 
 					transactionBitcount := 0
-					for c, cost := range outputsAndFeesBitcosts {
-						transactionBitcount += int(cost)
-						if outputsAndFeesEncodingChoice[c] == 0 {
+					mutex.Lock()
+					for c, code := range outputsAndFeesCodes {
+						transactionBitcount += code.Length
+						if outputsAndFeesEncodingChoice[c] == literalSelector {
 							local.stats.LiteralHits++
+							local.stats.LiteralBits += uint64(code.Length)
+							podiumForLiterals.Submit(code, outputsAndFeesQuotes[c])
 						}
-						if outputsAndFeesEncodingChoice[c] == 1 {
+						if outputsAndFeesEncodingChoice[c] == celebSelector {
 							local.stats.CelebrityHits++
+							local.stats.CelebrityBits += uint64(code.Length)
+							podiumForCelebrities.Submit(code, outputsAndFeesQuotes[c])
 						}
-						if outputsAndFeesEncodingChoice[c] == 2 {
-							local.stats.KMeansHits++
+						if outputsAndFeesEncodingChoice[c] == ghostSelector {
+							local.stats.GhostHits++
+							local.stats.GhostBits += uint64(code.Length)
+							podiumForGhosts.Submit(code, outputsAndFeesQuotes[c])
 						}
-						if outputsAndFeesEncodingChoice[c] == 3 {
+						if outputsAndFeesEncodingChoice[c] == restSelector {
 							local.stats.RestHits++
+							local.stats.RestBits += uint64(code.Length)
 							if c > 0 && c-1 < 255 {
 								// Not fees. Make a note to exclude from next kmeans run
 								transToExcludedOutput[transIndex] = byte(c - 1)
 							}
+							podiumForRest.Submit(code, outputsAndFeesQuotes[c])
 						}
 					}
+					mutex.Unlock()
 
 					local.stats.TotalBits += uint64(transactionBitcount)
 
@@ -591,9 +647,13 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	for res := range resultsChan {
 		globalStats.TotalBits += res.stats.TotalBits
 		globalStats.CelebrityHits += res.stats.CelebrityHits
-		globalStats.KMeansHits += res.stats.KMeansHits
+		globalStats.CelebrityBits += res.stats.CelebrityBits
+		globalStats.GhostHits += res.stats.GhostHits
+		globalStats.GhostBits += res.stats.GhostBits
 		globalStats.LiteralHits += res.stats.LiteralHits
+		globalStats.LiteralBits += res.stats.LiteralBits
 		globalStats.RestHits += res.stats.RestHits
+		globalStats.RestBits += res.stats.RestBits
 
 		for me := int64(0); me < microEpochs; me++ {
 			for p := 0; p < CSV_COLUMNS; p++ {
@@ -601,6 +661,13 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 			}
 		}
 	}
+
+	fmt.Printf("Top 5 Literals:\n")
+	podiumForLiterals.Rank(5)
+	fmt.Printf("Top 5 Celebrities:\n")
+	podiumForCelebrities.Rank(5)
+	fmt.Printf("Top 5 Ghosts:\n")
+	podiumForGhosts.Rank(5)
 
 	return globalStats, globalStrengths, &transToExcludedOutput
 }
