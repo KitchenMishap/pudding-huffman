@@ -53,7 +53,7 @@ func (h *Histograms) MergeAndSort() (shardsAmount map[int64]int64) {
 		h.mu[i].Unlock()
 	}
 
-	println("Truncating...")
+	fmt.Printf("Truncating...\n")
 	amountTruncated, reason := TruncateMapWithEscapeCode(amountsMap, 100000, 0.99, -1)
 	if reason == 0 {
 		fmt.Printf(REASON_STRING_0)
@@ -330,11 +330,13 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	var microEpochToPhasePeaks [][]float64
 	var microEpochToPeakStrengths [][3]int64
 
-	var exclude *[2000000000]byte = nil
+	var excludeTransOutputs *[2000000000]byte = nil // Comes out of pass 0, goes into pass 1
+	var excludeCelebs []map[int64]bool = nil        // Comes out of pass 0, goes into pass 1
 	for pass := 0; pass < 2; pass++ {
 		fmt.Printf("\t==== Pass %d ====\n", pass)
 
-		microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch, epochToCelebCodes, blocksPerEpoch, deterministic, exclude)
+		microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch,
+			epochToCelebCodes, blocksPerEpoch, deterministic, excludeTransOutputs, excludeCelebs)
 		if err != nil {
 			return err
 		}
@@ -366,7 +368,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 				}
 			}
 			f.Close()
-		}
+		} // if pass==1
 
 		for meID := 0; meID < int(microEpochs); meID++ {
 			// Sort the peaks for this epoch so Peak 0 is always the smallest phase
@@ -387,15 +389,15 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			huffCombinedRoot := huffman.BuildHuffmanTree(combinedTruncated)
 			combinedCodes := make(map[int64]huffman.BitCode)
 			huffman.GenerateBitCodes(huffCombinedRoot, 0, 0, combinedCodes)
-			fmt.Printf("Reason (if any) why frequencies map was truncated\n")
+			fmt.Printf("\tReason (if any) why frequencies map was truncated\n")
 			if reason == 0 {
-				println(REASON_STRING_0)
+				fmt.Printf("\t%s\n", REASON_STRING_0)
 			}
 			if reason == 1 {
-				println(REASON_STRING_1)
+				fmt.Printf("\t%s\n", REASON_STRING_1)
 			}
 			if reason == 2 {
-				println(REASON_STRING_2)
+				fmt.Printf("\t%s\n", REASON_STRING_2)
 			}
 
 			fmt.Printf("Huffman trees for clockPhase residuals AT EACH EXP MAGNITUDE\n")
@@ -437,9 +439,14 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			huffman.GenerateBitCodes(huffExpRoot, 0, 0, expCodes)
 
 			elapsed = time.Since(startTime)
-			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Simulating compression with fiat peaks **==")
-
-			result, microEpochToPeakStrengths, exclude = compress.ParallelSimulateCompressionWithKMeans(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, expCodes, residualCodesByExp, magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
+			sJob = "==** Simulating compression with fiat peaks **=="
+			tJob := time.Now()
+			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
+			result, microEpochToPeakStrengths, excludeTransOutputs, excludeCelebs = compress.ParallelSimulateCompressionWithKMeans(chain, handles,
+				blocksPerEpoch, blocksPerMicroEpoch, blocks,
+				epochToCelebCodes, expCodes, residualCodesByExp, magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
+			jobElapsed := time.Since(tJob)
+			fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
 			bitsPerGB := float64(8 * 1024 * 1024 * 1024)
 			p := message.NewPrinter(language.English) // For commas between thousands
@@ -458,8 +465,8 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			p.Printf("Literal Satoshis average bits: %.1f\n", float64(result.LiteralBits)/float64(result.LiteralHits))
 			p.Printf("-----\n")
 			p.Printf("The Rest bits: %d (%f GB)\n", result.RestBits, float64(result.RestBits)/bitsPerGB)
-			p.Printf("Literal Satoshis hits: %d\n", result.RestHits)
-			p.Printf("Literal Satoshs average bits: %.1f\n", float64(result.RestBits)/float64(result.RestHits))
+			p.Printf("TheRest Satoshis hits: %d\n", result.RestHits)
+			p.Printf("TheRest Satoshs average bits: %.1f\n", float64(result.RestBits)/float64(result.RestHits))
 			p.Printf("-----\n")
 
 			p.Printf("Fiat Ghost hits: %d\n", result.GhostHits)
@@ -469,7 +476,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 		}
 
 		fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Finished Pass **==")
-	}
+	} // for pass
 	exportOracleCSV("Oracle.csv", microEpochToPhasePeaks, microEpochToPeakStrengths)
 
 	return nil

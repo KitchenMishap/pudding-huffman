@@ -38,7 +38,7 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	max_base_10_exp int) (CompressionStats, []int64, []int64, error) {
 
 	sJob := "Stage 1: ParallelAmountStatistics() (PARALLEL by block)"
-	fmt.Printf("%s\n", sJob)
+	fmt.Printf("\t%s\n", sJob)
 	tJob := time.Now()
 
 	blocksDone := uint64(0) // atomic int
@@ -300,8 +300,8 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 						}
 					}
 				} // for tranaction
-				done := atomic.AddInt64((*int64)(&blocksDone), 1)
-				fmt.Printf("\r\tProgress %5.1f   ", float64(done*100)/float64(blocksDone))
+				done := atomic.AddInt64(&blocksDone, 1)
+				fmt.Printf("\r\tProgress %.1f   ", float64(done*100)/float64(blocks))
 			} // for block
 			resultsChan <- local
 			return nil
@@ -376,18 +376,24 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	residualCodesByExp []map[int64]huffman.BitCode,
 	magnitudeCodes map[int64]huffman.BitCode,
 	combinedCodes map[int64]huffman.BitCode,
-	microEpochToPhasePeaks [][]float64) (CompressionStats, [][CSV_COLUMNS]int64, *[2000000000]byte) {
+	microEpochToPhasePeaks [][]float64) (CompressionStats,
+	[][CSV_COLUMNS]int64,
+	*[2000000000]byte, // Which outputs of each transaction to exclude from next k-means peak detection
+	[]map[int64]bool) { // Which celebrities to exclude (per epoch) from next k-means peak detection
+
+	fmt.Printf("\t(PARALLEL, by block)\n")
 
 	mutex := &sync.Mutex{}
 	podiumForLiterals := huffman.NewPodium()
 	podiumForCelebrities := huffman.NewPodium()
 	podiumForGhosts := huffman.NewPodium()
-	podiumForRest := huffman.NewPodium()
-	podiumForEverything := huffman.NewPodium()
+	podiumForRests := huffman.NewPodium()
+	podiumForGL := huffman.NewPodium()
 
 	completed := int64(0) // Atomic int
 
 	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
+	epochs := bucketCount(blocks, blocksPerEpoch)
 
 	workersDivider := 1
 	numWorkers := runtime.NumCPU() / workersDivider
@@ -396,7 +402,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	}
 	//numWorkers = 1 // Serial test! I may be some time
 
-	jobsChan := make(chan int64, 100)
+	blocksChan := make(chan int64, 100)
 	type workerResult struct {
 		stats         CompressionStats
 		peakStrengths [][CSV_COLUMNS]int64
@@ -408,6 +414,12 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	g, ctx := errgroup.WithContext(context.Background())
 
 	transToExcludedOutput := [2000000000]byte{}
+	celebsToExcludeOutput := make([]map[int64]bool, epochs)
+	celebsMutexes := make([]sync.Mutex, epochs)
+	for i := int64(0); i < epochs; i++ {
+		celebsToExcludeOutput[i] = make(map[int64]bool)
+		celebsMutexes[i] = sync.Mutex{}
+	}
 
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
@@ -417,7 +429,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 				peakStrengths: make([][CSV_COLUMNS]int64, microEpochs),
 			}
 
-			for blockIdx := range jobsChan {
+			for blockIdx := range blocksChan {
 				// Check if another worker already failed
 				select {
 				case <-ctx.Done():
@@ -427,6 +439,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 				epochID := blockIdx / blocksPerEpoch
 				microEpochID := blockIdx / blocksPerMicroEpoch
+				doPodium := (epochID == epochs-1)
 
 				blockHandle, err := handles.BlockHandleByHeight(int64(blockIdx))
 				if err != nil {
@@ -490,11 +503,18 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 						celebQuote := "?"
 						if aCode, ok := epochToCelebCodes[epochID][amount]; ok {
 							celebCode = huffman.JoinBitCodes(celebSelector, aCode)
-							if amount >= 100000 {
-								celebQuote = "Celeb BTC amount: " + strconv.FormatFloat(float64(amount)/100000000, 'f', 8, 64) + " BTC"
-							} else {
-								celebQuote = "Celeb BTC amount: " + strconv.FormatInt(amount, 10) + " sats"
+							if doPodium {
+								if amount >= 100000 {
+									celebQuote = "Celeb BTC amount: " + strconv.FormatFloat(float64(amount)/100000000, 'f', 8, 64) + " BTC"
+								} else {
+									celebQuote = "Celeb BTC amount: " + strconv.FormatInt(amount, 10) + " sats"
+								}
 							}
+							// amount is a winning (cheap) celeb for this epoch
+							// exclude amount from the next k-means peak detection run
+							celebsMutexes[epochID].Lock()
+							celebsToExcludeOutput[epochID][amount] = true
+							celebsMutexes[epochID].Unlock()
 						}
 
 						// Stage 2: Ghost cost (maxint means ghost status not available)
@@ -514,13 +534,15 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								}
 								if eCode, ok := expCodes[int64(e)]; ok {
 									ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
-									// 4 digit peak value in sats
-									digitsSats := int64(math.Round(math.Pow(10, microEpochToPhasePeaks[microEpochID][peakIdx]) * 1000))
-									ghostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
-									ghostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
-									ghostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
-									ghostQuote += strconv.FormatInt(int64(e-3), 10) + " and residual "
-									ghostQuote += strconv.FormatInt(r, 10)
+									if doPodium {
+										// 4 digit peak value in sats
+										digitsSats := int64(math.Round(math.Pow(10, microEpochToPhasePeaks[microEpochID][peakIdx]) * 1000))
+										ghostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
+										ghostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
+										ghostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
+										ghostQuote += strconv.FormatInt(int64(e-3), 10) + " and residual "
+										ghostQuote += strconv.FormatInt(r, 10)
+									}
 								} else {
 									panic("missing exp code")
 								}
@@ -549,9 +571,10 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							bitsCode = huffman.BitCode{0, 0}
 						}
 						literalCode = huffman.JoinBitCodes(literalSelector, magCode, bitsCode)
-						literalQuote = "Literal: " + strconv.FormatInt(amount, 10) + " sats"
-
-						// Choose whichever choice of encoding is cheapest
+						if doPodium {
+							literalQuote = "Literal: " + strconv.FormatInt(amount, 10) + " sats"
+						}
+						// Choose whichever choice of encoding is cheapest (ignoring restSelector for now)
 						choice := literalSelector
 						chosenCode := literalCode
 						chosenQuote := literalQuote
@@ -590,22 +613,32 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 						if outputsAndFeesEncodingChoice[c] == literalSelector {
 							local.stats.LiteralHits++
 							local.stats.LiteralBits += uint64(code.Length)
-							podiumForLiterals.Submit(code, outputsAndFeesQuotes[c])
+							if doPodium {
+								podiumForLiterals.Submit(code, outputsAndFeesQuotes[c])
+								podiumForGL.Submit(code, outputsAndFeesQuotes[c])
+							}
 						}
 						if outputsAndFeesEncodingChoice[c] == celebSelector {
 							local.stats.CelebrityHits++
 							local.stats.CelebrityBits += uint64(code.Length)
-							podiumForCelebrities.Submit(code, outputsAndFeesQuotes[c])
+							if doPodium {
+								podiumForCelebrities.Submit(code, outputsAndFeesQuotes[c])
+							}
 						}
 						if outputsAndFeesEncodingChoice[c] == ghostSelector {
 							local.stats.GhostHits++
 							local.stats.GhostBits += uint64(code.Length)
-							podiumForGhosts.Submit(code, outputsAndFeesQuotes[c])
+							if doPodium {
+								podiumForGhosts.Submit(code, outputsAndFeesQuotes[c])
+								podiumForGL.Submit(code, outputsAndFeesQuotes[c])
+							}
 						}
 						if outputsAndFeesEncodingChoice[c] == restSelector {
 							local.stats.RestHits++
 							local.stats.RestBits += uint64(code.Length)
-							podiumForRest.Submit(code, outputsAndFeesQuotes[c])
+							if doPodium {
+								podiumForRests.Submit(code, outputsAndFeesQuotes[c])
+							}
 							// For this transaction (using the transaction's height as an index), we
 							// make a note of which transaction output (c) is to be excluded from the next
 							// round of ghost k-means peak estimation. We have room to store this as a byte.
@@ -639,10 +672,10 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 		})
 	}
 	go func() {
-		defer close(jobsChan)
+		defer close(blocksChan)
 		for b := int64(0); b < blocks; b++ {
 			select { // Note: NOT a switch statement!
-			case jobsChan <- b: // This happens if a worker is free to be fed an epoch ID
+			case blocksChan <- b: // This happens if a worker is free to be fed an epoch ID
 			case <-ctx.Done(): // This happens if a worker returned an err
 				return
 			}
@@ -675,16 +708,23 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	}
 
 	n := 10
-	fmt.Printf("Top %d OVERALL codes (Literal, Celebrity, Ghost, TheRest\n", n)
-	podiumForEverything.Rank(n)
+	fmt.Printf("=========================================================\n")
+	fmt.Printf("==== HERE ARE THE PODIUMS! (For just the last Epoch) ====\n")
+	fmt.Printf("=========================================================\n")
+	fmt.Printf("Top %d Ghost & Literal codes together\n", n)
+	podiumForGL.Rank(n)
+	fmt.Printf("=====================\n")
 	fmt.Printf("Top %d Literal codes:\n", n)
 	podiumForLiterals.Rank(n)
+	fmt.Printf("=======================\n")
 	fmt.Printf("Top %d Celebrity codes:\n", n)
 	podiumForCelebrities.Rank(n)
+	fmt.Printf("===================\n")
 	fmt.Printf("Top %d Ghost codes:\n", n)
 	podiumForGhosts.Rank(n)
-	fmt.Printf("Top %d TheRest codess:\n", n)
-	podiumForGhosts.Rank(n)
+	fmt.Printf("=====================\n")
+	fmt.Printf("Top %d TheRest codes:\n", n)
+	podiumForRests.Rank(n)
 
-	return globalStats, globalStrengths, &transToExcludedOutput
+	return globalStats, globalStrengths, &transToExcludedOutput, celebsToExcludeOutput
 }

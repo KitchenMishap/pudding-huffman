@@ -45,14 +45,16 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 	}
 
 	result := []float64{}
-	// fundamental times logs representing 1.0, 1.1, 1.2, ..., 9.9
-	for i := float64(1.00); i < 10.00; i += 0.1 {
-		result = append(result, math.Mod(float64(bestPeak)+math.Log10(i), 1))
-	}
 
-	//result = append(result, math.Mod(bestPeak+math.Log10(1), 1))
-	//result = append(result, math.Mod(bestPeak+math.Log10(2), 1))
-	//result = append(result, math.Mod(bestPeak+math.Log10(5), 1))
+	// fundamental times logs representing 1.0, 1.1, 1.2, ..., 9.9
+	//for i := float64(1.00); i < 10.00; i += 0.1 {
+	//	result = append(result, math.Mod(float64(bestPeak)+math.Log10(i), 1))
+	//}
+
+	// OR just 1,2,5
+	result = append(result, math.Mod(float64(bestPeak)+math.Log10(1), 1))
+	result = append(result, math.Mod(float64(bestPeak)+math.Log10(2), 1))
+	result = append(result, math.Mod(float64(bestPeak)+math.Log10(5), 1))
 
 	return result
 }
@@ -342,10 +344,11 @@ func bucketCount(beans int64, beansPerBucket int64) int64 {
 
 func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator, blocks int64, blocksPerMicroEpoch int64,
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand,
-	transToExcludedOutput *[2000000000]byte) ([][]float64, error) {
+	transToExcludedOutput *[2000000000]byte,
+	epochToExcludedCelebs []map[int64]bool) ([][]float64, error) {
 
 	sJob := "Peak detection: PARALLEL by micro-epoch"
-	fmt.Printf("%s\n", sJob)
+	fmt.Printf("\t%s\n", sJob)
 	tJob := time.Now()
 
 	epochs := bucketCount(blocks, blocksPerEpoch)
@@ -393,6 +396,13 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 			salt := int64(1) // Tried this salt next... YES AND NO (froze once, sailed once, froze a second time)
 			src := rand.NewSource(int64(epochID) + salt)
 			localRand := rand.New(src)
+
+			var celebsToExclude map[int64]bool
+			if epochToExcludedCelebs == nil {
+				celebsToExclude = nil
+			} else {
+				celebsToExclude = epochToExcludedCelebs[epochID]
+			}
 
 			// Go through the microEpochs in this epoch
 			firstMe := epochID * microEpochsPerEpoch
@@ -486,25 +496,41 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 						for txo, sats := range txoAmounts {
 							txoCount++
 							amount := sats
-							oldCodeTxoIndex := firstTxoOfTrans + int64(txo)
-							if _, ok := celebCodesPerEpoch[epochID][amount]; !ok {
-								// Only if NOT a celeb
-								if transToExcludedOutput == nil {
-									// First pass, thin it down
-									if oldCodeTxoIndex-firstTxoOfMe < 1000 || oldCodeTxoIndex%20 == 0 {
-										buffer = append(buffer, amount)
-									}
-								} else {
-									// Second pass
-									// Is it excluded? (recognized as high entropy change?)
-									excludeCode := transToExcludedOutput[transIndex]
-									// 255 is a special code meaning "do not exclude any of the outputs"
-									// 0 to 254 are codes meaning "exclude this output, one of output index 0 to 254"
-									if excludeCode == 255 || int64(excludeCode) != int64(txo) {
-										// Do not exclude txo. So use it.
-										// But maybe do some thinning
+
+							excluded := false
+							found := false
+							exclusionListExists := false
+							if celebsToExclude != nil {
+								exclusionListExists = true
+								excluded, found = celebsToExclude[amount]
+							}
+							if exclusionListExists && found {
+								excluded = true
+							}
+
+							if excluded {
+								// The amount is specified as an excluded celebrity for this epoch
+							} else {
+								oldCodeTxoIndex := firstTxoOfTrans + int64(txo)
+								if _, ok := celebCodesPerEpoch[epochID][amount]; !ok {
+									// Only if NOT a celeb
+									if transToExcludedOutput == nil {
+										// First pass, thin it down
 										if oldCodeTxoIndex-firstTxoOfMe < 1000 || oldCodeTxoIndex%20 == 0 {
 											buffer = append(buffer, amount)
+										}
+									} else {
+										// Second pass
+										// Is it excluded? (recognized as high entropy change?)
+										excludeCode := transToExcludedOutput[transIndex]
+										// 255 is a special code meaning "do not exclude any of the outputs"
+										// 0 to 254 are codes meaning "exclude this output, one of output index 0 to 254"
+										if excludeCode == 255 || int64(excludeCode) != int64(txo) {
+											// Do not exclude txo. So use it.
+											// But maybe do some thinning
+											if oldCodeTxoIndex-firstTxoOfMe < 1000 || oldCodeTxoIndex%20 == 0 {
+												buffer = append(buffer, amount)
+											}
 										}
 									}
 								}

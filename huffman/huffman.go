@@ -123,7 +123,7 @@ func NewPodium() *Podium {
 }
 
 func (p *Podium) Submit(code BitCode, words string) {
-	if code.Length > 16 || code.Length == 0 {
+	if code.Length > 24 || code.Length == 0 {
 		return // Disqualified from the short-code podium
 	}
 
