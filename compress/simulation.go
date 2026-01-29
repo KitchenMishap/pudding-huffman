@@ -373,7 +373,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	blocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	expCodes map[int64]huffman.BitCode,
-	residualCodesByExp []map[int64]huffman.BitCode,
+	residualCodesSlicesByExp [][]huffman.BitCode,
 	magnitudeCodes map[int64]huffman.BitCode,
 	combinedCodes map[int64]huffman.BitCode,
 	microEpochToPhasePeaks [][]float64) (CompressionStats,
@@ -525,7 +525,15 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 						// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
 						if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && len(microEpochToPhasePeaks[microEpochID]) > 0 {
 							e, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
-							if rCode, ok := residualCodesByExp[e][r]; ok {
+							residualCodes := residualCodesSlicesByExp[e]
+							zeroOffset := len(residualCodes) / 2 // Oh yes it is, because residualCodes[0] is inserted for esc
+							huffmanIndex := r + int64(zeroOffset)
+							if huffmanIndex <= 0 || huffmanIndex >= int64(len(residualCodes)) {
+								// residual is too -ve or too +ve
+								// We won't be storing this as a ghost!
+							} else {
+								rCode := residualCodes[r+int64(zeroOffset)]
+
 								// Now we have a huffman code for the combination of peak index and harmonic index.
 								// This is the initial cost...
 								combinedCode := combinedCodes[int64(3*peakIdx+harmonic)]

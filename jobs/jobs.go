@@ -401,7 +401,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			}
 
 			fmt.Printf("Huffman trees for clockPhase residuals AT EACH EXP MAGNITUDE\n")
-			residualCodesByExp := make([]map[int64]huffman.BitCode, MAX_BASE_10_EXP)
+			residualCodesSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
 			reasonHist = make(map[int]int64)
 			for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
 				// Build a specific tree for this exponent
@@ -410,8 +410,9 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 				residualTruncated, reason := TruncateMapWithEscapeCode(residualsMapByExp[exp], maxCodes, 0.99, ESCAPE_VALUE)
 				reasonHist[reason]++
 				huffResidualRoot := huffman.BuildHuffmanTree(residualTruncated)
-				residualCodesByExp[exp] = make(map[int64]huffman.BitCode)
-				huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesByExp[exp])
+				residualCodesThisExp := make(map[int64]huffman.BitCode)
+				huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesThisExp)
+				residualCodesSlicesByExp[exp] = huffmanMapToMidpointSlice(residualCodesThisExp, ESCAPE_VALUE)
 			}
 			fmt.Printf("\tStatistics of why each map was truncated before being sent for Huffman encoding:\n")
 			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
@@ -444,7 +445,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
 			result, microEpochToPeakStrengths, excludeTransOutputs, excludeCelebs = compress.ParallelSimulateCompressionWithKMeans(chain, handles,
 				blocksPerEpoch, blocksPerMicroEpoch, blocks,
-				epochToCelebCodes, expCodes, residualCodesByExp, magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
+				epochToCelebCodes, expCodes, residualCodesSlicesByExp, magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
 			jobElapsed := time.Since(tJob)
 			fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
@@ -506,6 +507,55 @@ func GetSensibleMaxCodes(exponent int) int {
 		return 1000000 // Your "Silliness" cap
 	}
 	return needed
+}
+
+func huffmanSliceMidpoint(length int) int { return length / 2 }
+
+// len(result) is even, and result[0] is a special entry for the escape_code key.
+// The midpoint (corresponding to a key of 0) therefore moves to len(result)
+func huffmanMapToMidpointSlice(m map[int64]huffman.BitCode, escapeCode int64) []huffman.BitCode {
+	if len(m) == 0 {
+		return nil
+	}
+
+	// 1. Find the absolute furthest residual from zero
+	var maxAbs int64
+	for k := range m {
+		// escapeCode is a VERY LARGE number that deserves special treatment
+		if k != escapeCode {
+			absK := k
+			if absK < 0 {
+				absK = -absK
+			}
+			if absK > maxAbs {
+				maxAbs = absK
+			}
+		}
+	}
+
+	// 2. Safety cap to prevent "The Beast" from eating too much RAM
+	if maxAbs > 500_000 {
+		return nil
+	}
+
+	// 3. Create a slice that can hold [esc, -maxAbs ... 0 ... +maxAbs]
+	// Size is 1 + (2 * maxAbs) + 1. The 1+ is for escape. +1 is for the zero itself.
+	span := 1 + (2 * maxAbs) + 1
+	slice := make([]huffman.BitCode, span)
+
+	// The midpoint index is incremented to make room for esc
+	escPoint := 0
+	midpoint := maxAbs + 1
+
+	for k, v := range m {
+		if k == escapeCode {
+			slice[escPoint] = v
+		} else {
+			slice[midpoint+k] = v
+		}
+	}
+
+	return slice
 }
 
 func exportOracleCSV(filename string, microEpochToPhasePeaks [][]float64, peakStrengths [][compress.CSV_COLUMNS]int64) {
