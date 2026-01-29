@@ -252,6 +252,23 @@ func cyclicDistance(a, b KFloat) KFloat {
 	return diff
 }
 
+func getLapAndDistance(logCentroid, peakCentroid KFloat) (lap int, dist KFloat) {
+	diff := logCentroid - peakCentroid
+
+	if diff > 0.5 {
+		// We are at 0.9 and peak is at 0.1.
+		// Shortest path is forward across the line.
+		return 1, diff - 1.0
+	} else if diff < -0.5 {
+		// We are at 0.1 and peak is at 0.9.
+		// Shortest path is backward across the line.
+		return -1, diff + 1.0
+	}
+
+	// No line crossed.
+	return 0, diff
+}
+
 func initializeCentroids(mantissas []KFloat, k int, deterministic *rand.Rand) []KFloat {
 	result := make([]KFloat, k)
 	count := len(mantissas)
@@ -317,20 +334,32 @@ func ExpPeakResidual(amount int64, logCentroids []float64) (exp int, peak int, h
 	}
 	exp = int(e)
 
+	// Gemini's "Boss Slayer" fix...
 	bestPeak := 0
-	bestDiff := cyclicDistance(logCentroid, KFloat(logCentroids[bestPeak]))
+	lapShift := 0
+	_, minDiff := getLapAndDistance(logCentroid, KFloat(logCentroids[0]))
+	minDiff = KFloat(math.Abs(float64(minDiff)))
+
 	for p := 1; p < len(logCentroids); p++ {
-		diff := cyclicDistance(logCentroid, KFloat(logCentroids[p]))
-		if diff < bestDiff {
-			bestDiff = diff
+		l, d := getLapAndDistance(logCentroid, KFloat(logCentroids[p]))
+		absD := KFloat(math.Abs(float64(d)))
+		if absD < minDiff {
+			minDiff = absD
 			bestPeak = p
+			lapShift = l // This is the secret sauce
 		}
 	}
-	peak = bestPeak
 
-	peakAmount := int64(math.Round(math.Pow(10, float64(logCentroids[bestPeak])+float64(exp))))
+	// Adjust the exponent by the lap shift before reconstruction
+	adjustedExp := float64(exp) - float64(lapShift)
 
+	peakAmount := int64(math.Round(math.Pow(10, logCentroids[bestPeak]+adjustedExp)))
 	residual = amount - peakAmount
+
+	// We return the ORIGINAL 'exp' because it represents the raw bit-magnitude of the satoshis.
+	// The lapshift is purely an internal correction to ensure our peak reconstruction
+	// doesn't  accidentally jump a power of 10 just because the clock hand crossed midnight.
+	// Returning 'AdjustedExp' would break the Huffman table lookups for the decoder
 
 	return
 }
