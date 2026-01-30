@@ -188,7 +188,7 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 }
 
 // const MaxResidual = 500_000
-const MaxResidual = 10_000
+const MaxResidual = 500_000
 const ResidualSliceWidth = (MaxResidual * 2) + 1
 const MaxCombined = 24
 
@@ -657,7 +657,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 					} // For transactions
 				} // for blockIdx
 				// Report progress on completion
-				done := atomic.AddInt64(&completed, 1)
+				done := atomic.AddInt64(&completed, blocksInBatch)
 				if done%10000 == 0 || done == blocks {
 					fmt.Printf("\r\tProgress: %.1f%%    ", float64(100*done)/float64(blocks))
 				}
