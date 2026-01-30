@@ -66,6 +66,36 @@ func BuildHuffmanTree(freqs map[int64]int64) *Node {
 	return heap.Pop(&pq).(*Node)
 }
 
+func BuildHuffmanTreeFromSlice(freqs []int64, offset int) *Node {
+	if len(freqs) == 0 {
+		return nil
+	}
+	pq := make(PriorityQueue, 0, len(freqs))
+	for i, freq := range freqs {
+		if freq == 0 {
+			continue
+		} // Crucial line!
+		val := i - offset
+		pq = append(pq, &Node{Value: int64(val), Freq: freq})
+	}
+	if len(pq) == 0 {
+		return nil
+	}
+	heap.Init(&pq)
+
+	for pq.Len() > 1 {
+		left := heap.Pop(&pq).(*Node)
+		right := heap.Pop(&pq).(*Node)
+		parent := &Node{
+			Freq:  left.Freq + right.Freq,
+			Left:  left,
+			Right: right,
+		}
+		heap.Push(&pq, parent)
+	}
+	return heap.Pop(&pq).(*Node)
+}
+
 func GenerateBitCodes(node *Node, currentBits uint64, depth int, table map[int64]BitCode) {
 	if node == nil {
 		return

@@ -187,14 +187,26 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	return finalStats, finalMags, finalExpFreqs, nil
 }
 
+// const MaxResidual = 500_000
+const MaxResidual = 10_000
+const ResidualSliceWidth = (MaxResidual * 2) + 1
+const MaxCombined = 24
+
 func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator,
 	blocksPerEpoch int64,
 	blocksPerMicroEpoch int64,
 	blocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	microEpochToPhasePeaks [][]float64,
-	max_base_10_exp int) ([20]map[int64]int64, // First result: outer array index is the exponent (number of decimal zeros). Inner map is freq for each possible residual
-	map[int64]int64) { // Second result: frequencies of combined peak/harmonic index
+	max_base_10_exp int) (*[20][ResidualSliceWidth]int64, // First result: outer array index is the exponent (number of decimal zeros). Inner array is freq for each possible residual
+	*[MaxCombined]int64) { // Second result: frequencies of combined peak/harmonic index
+
+	// TotalResidualFreqs is a flat array of all possible residuals
+	if max_base_10_exp != 20 {
+		panic("You changed a constant!")
+	}
+	var TotalResidualFreqsByExp = [20][ResidualSliceWidth]int64{}
+	var TotalCombinedFreq = [MaxCombined]int64{}
 
 	tJob := time.Now()
 	sJob := "Stage 1.5, gather frequencies of residuals by exp magnitude (PARALLEL by block)"
@@ -213,12 +225,8 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	if max_base_10_exp != 20 {
 		panic("You changed a constant!")
 	}
-	type workerResult struct {
-		// A separate map for each exponent level
-		localResidualsByExp [20]map[int64]int64
-		localCombinedFreq   map[int64]int64
-	}
-	resultsChan := make(chan workerResult, numWorkers)
+
+	resultsChan := make(chan int, numWorkers)
 	var wg sync.WaitGroup
 
 	// Create an errgroup and a context
@@ -230,15 +238,6 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 		wg.Add(1)
 		g.Go(func() error { // Use the errgroup instead of "go func() {"
 			defer wg.Done()
-
-			if max_base_10_exp != 20 {
-				panic("You changed a constant!")
-			}
-			local := workerResult{}
-			local.localCombinedFreq = make(map[int64]int64)
-			for i := 0; i < max_base_10_exp; i++ {
-				local.localResidualsByExp[i] = make(map[int64]int64, MAX_PHASE_PEAKS)
-			}
 
 			for blockIdx := range jobsChan {
 				// Check if another worker already failed
@@ -278,7 +277,6 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 					}
 					for _, sats := range txoAmounts {
 						amount := sats
-						// END new iteration code
 
 						// Stage 1: Celebrity
 						if _, ok := epochToCelebCodes[epochID][amount]; ok {
@@ -293,17 +291,20 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 
 						e, peak, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
 						combined := peak*3 + harmonic
-						local.localCombinedFreq[int64(combined)]++
+						atomic.AddInt64(&(TotalCombinedFreq[combined]), 1)
 
 						if e >= 0 && e < max_base_10_exp {
-							local.localResidualsByExp[e][r]++
+							if r >= -MaxResidual && r <= MaxResidual {
+								const zeroOffset = MaxResidual
+								atomic.AddInt64(&(TotalResidualFreqsByExp[e][r+zeroOffset]), 1)
+							}
 						}
 					}
 				} // for tranaction
 				done := atomic.AddInt64(&blocksDone, 1)
 				fmt.Printf("\r\tProgress %.1f   ", float64(done*100)/float64(blocks))
 			} // for block
-			resultsChan <- local
+			resultsChan <- 123
 			return nil
 		})
 	}
@@ -334,30 +335,14 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	if max_base_10_exp != 20 {
 		panic("You changed a constant!")
 	}
-	finalResidualsByExp := [20]map[int64]int64{}
-	for i := 0; i < max_base_10_exp; i++ {
-		finalResidualsByExp[i] = make(map[int64]int64)
-	}
-	finalCombinedFreqs := make(map[int64]int64)
 
-	for res := range resultsChan {
-		// Merge the 20 exponent maps from this worker
-		for e := 0; e < max_base_10_exp; e++ {
-			for r, count := range res.localResidualsByExp[e] {
-				finalResidualsByExp[e][r] += count
-			}
-		}
-		for combined := 0; combined < 24; combined++ {
-			if freq, ok := res.localCombinedFreq[int64(combined)]; ok {
-				finalCombinedFreqs[int64(combined)] += freq
-			}
-		}
+	for _ = range resultsChan {
 	}
 
 	jobElapsed = time.Since(tJob)
 	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
-	return finalResidualsByExp, finalCombinedFreqs
+	return &TotalResidualFreqsByExp, &TotalCombinedFreq
 }
 
 func bucketCount(beans int64, beansPerBucket int64) int64 {
@@ -526,13 +511,13 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 						if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && len(microEpochToPhasePeaks[microEpochID]) > 0 {
 							e, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
 							residualCodes := residualCodesSlicesByExp[e]
-							zeroOffset := len(residualCodes) / 2 // Oh yes it is, because residualCodes[0] is inserted for esc
+							zeroOffset := (len(residualCodes) - 1) / 2
 							huffmanIndex := r + int64(zeroOffset)
-							if huffmanIndex <= 0 || huffmanIndex >= int64(len(residualCodes)) {
+							if huffmanIndex < 0 || huffmanIndex >= int64(len(residualCodes)) {
 								// residual is too -ve or too +ve
 								// We won't be storing this as a ghost!
 							} else {
-								rCode := residualCodes[r+int64(zeroOffset)]
+								rCode := residualCodes[huffmanIndex]
 
 								// Now we have a huffman code for the combination of peak index and harmonic index.
 								// This is the initial cost...

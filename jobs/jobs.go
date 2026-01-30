@@ -379,37 +379,21 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "Build residuals map (PARALLEL per exp) ")
 
-			residualsMapByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
+			residualsSliceByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
 
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
 
 			fmt.Printf("Huffman tree for combined peak and harmonic selection\n")
-			combinedTruncated, reason := TruncateMapWithEscapeCode(combinedFreq, 124, 1.0, ESCAPE_VALUE)
-			huffCombinedRoot := huffman.BuildHuffmanTree(combinedTruncated)
+			huffCombinedRoot := huffman.BuildHuffmanTreeFromSlice(combinedFreq[:], compress.MaxResidual)
 			combinedCodes := make(map[int64]huffman.BitCode)
 			huffman.GenerateBitCodes(huffCombinedRoot, 0, 0, combinedCodes)
-			fmt.Printf("\tReason (if any) why frequencies map was truncated\n")
-			if reason == 0 {
-				fmt.Printf("\t%s\n", REASON_STRING_0)
-			}
-			if reason == 1 {
-				fmt.Printf("\t%s\n", REASON_STRING_1)
-			}
-			if reason == 2 {
-				fmt.Printf("\t%s\n", REASON_STRING_2)
-			}
 
 			fmt.Printf("Huffman trees for clockPhase residuals AT EACH EXP MAGNITUDE\n")
 			residualCodesSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
-			reasonHist = make(map[int]int64)
 			for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
 				// Build a specific tree for this exponent
-				// Lets pick a max number of codes.
-				maxCodes := GetSensibleMaxCodes(exp)
-				residualTruncated, reason := TruncateMapWithEscapeCode(residualsMapByExp[exp], maxCodes, 0.99, ESCAPE_VALUE)
-				reasonHist[reason]++
-				huffResidualRoot := huffman.BuildHuffmanTree(residualTruncated)
+				huffResidualRoot := huffman.BuildHuffmanTreeFromSlice(residualsSliceByExp[exp][:], compress.MaxResidual)
 				residualCodesThisExp := make(map[int64]huffman.BitCode)
 				huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesThisExp)
 				residualCodesSlicesByExp[exp] = huffmanMapToMidpointSlice(residualCodesThisExp, ESCAPE_VALUE)
@@ -534,25 +518,19 @@ func huffmanMapToMidpointSlice(m map[int64]huffman.BitCode, escapeCode int64) []
 	}
 
 	// 2. Safety cap to prevent "The Beast" from eating too much RAM
-	if maxAbs > 500_000 {
+	if maxAbs > compress.MaxResidual {
 		return nil
 	}
 
 	// 3. Create a slice that can hold [esc, -maxAbs ... 0 ... +maxAbs]
-	// Size is 1 + (2 * maxAbs) + 1. The 1+ is for escape. +1 is for the zero itself.
-	span := 1 + (2 * maxAbs) + 1
+	// Size is 2 * maxAbs + 1. +1 is for the zero itself.
+	span := 2*maxAbs + 1
 	slice := make([]huffman.BitCode, span)
 
-	// The midpoint index is incremented to make room for esc
-	escPoint := 0
-	midpoint := maxAbs + 1
+	midpoint := maxAbs
 
 	for k, v := range m {
-		if k == escapeCode {
-			slice[escPoint] = v
-		} else {
-			slice[midpoint+k] = v
-		}
+		slice[midpoint+k] = v
 	}
 
 	return slice
