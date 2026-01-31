@@ -377,7 +377,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			//			sort.Float64s(microEpochToPhasePeaks[meID])	ToDo
 		}
 
-		if true {
+		if pass == 0 {
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "Build residuals map (PARALLEL per exp) ")
 

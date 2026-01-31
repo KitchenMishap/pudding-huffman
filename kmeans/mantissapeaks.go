@@ -152,7 +152,11 @@ func (uma *Uint16MantissaArray) Get(i int) KFloat {
 	return KFloat(v) / 65536.0
 }
 func (uma *Uint16MantissaArray) Get10toPow(i int, additionalExp int) float64 {
-	return TenToPower(uma.data[i]) * Pows10[additionalExp]
+	if additionalExp >= 0 {
+		return TenToPower(uma.data[i]) * Pows10[additionalExp]
+	} else {
+		return math.Pow(10, float64(uma.data[i])+float64(additionalExp))
+	}
 }
 
 func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
