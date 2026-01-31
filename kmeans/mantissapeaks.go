@@ -8,8 +8,10 @@ import (
 	"github.com/KitchenMishap/pudding-shed/chainreadinterface"
 	"golang.org/x/sync/errgroup"
 	"math"
+	"math/bits"
 	"math/rand"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -22,9 +24,15 @@ type MantissaArray interface {
 	AsKFloatSlice() []KFloat
 	Set(i int, v KFloat)
 	Get(i int) KFloat
+	Get10toPow(i int, additionalExp int) float64
 	Len() int
 	TryEstimateRiceBits(peak KFloat, k uint) (int64, bool)
 }
+
+var Pows10 = [20]float64{1, 10, 100, 1000, 10_000,
+	100_000, 1000_000, 10_000_000, 100_000_000, 1000_000_000,
+	10_000_000_000, 100_000_000_000, 1000_000_000_000, 10_000_000_000_000, 100_000_000_000_000,
+	1000_000_000_000_000, 10_000_000_000_000_000, 100_000_000_000_000_000, 1000_000_000_000_000_000, 10_000_000_000_000_000_000}
 
 type KFloatMantissaArray struct {
 	data []KFloat
@@ -66,6 +74,9 @@ func (kma *KFloatMantissaArray) Set(i int, v KFloat) {
 func (kma *KFloatMantissaArray) Get(i int) KFloat {
 	return kma.data[i]
 }
+func (kma *KFloatMantissaArray) Get10toPow(i int, additionalExp int) float64 {
+	return math.Pow(10, float64(kma.data[i])+float64(additionalExp))
+}
 func (kma *KFloatMantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
 	return -1, false // Not implemented flag
 }
@@ -81,21 +92,27 @@ func NewUint16MantissaArray(size int) *Uint16MantissaArray {
 	return &Uint16MantissaArray{make([]uint16, size)}
 }
 
+var (
+	TenToPowerLookup [65536]float64
+	initOnce         sync.Once
+)
+
+func TenToPower(pow uint16) float64 {
+	initOnce.Do(func() {
+		for i := range 65536 {
+			power := float64(i) / 65536.0
+			TenToPowerLookup[i] = math.Pow(10, power)
+		}
+	})
+	return TenToPowerLookup[pow]
+}
+
 // Map Satoshi to the 0...65535 dial
 func NewUint16MantissaArrayFromSats(sats []int64) *Uint16MantissaArray {
+	BuildLog10Table() // Ensure table is ready
 	arr := &Uint16MantissaArray{data: make([]uint16, len(sats))}
 	for i, s := range sats {
-		if s <= 0 {
-			arr.data[i] = 0
-			continue
-		}
-		// float64(uint16) conversion logic
-		lg := math.Log10(float64(s))
-		_, frac := math.Modf(lg)
-		if frac < 0 {
-			frac += 1.0
-		} // Handle negative logs (sats < 1)
-		arr.data[i] = uint16(frac * 65536.0)
+		arr.data[i], _ = FastLog10FractionalAndExp(s)
 	}
 	return arr
 }
@@ -133,6 +150,9 @@ func (uma *Uint16MantissaArray) Set(i int, v KFloat) {
 func (uma *Uint16MantissaArray) Get(i int) KFloat {
 	v := uma.data[i]
 	return KFloat(v) / 65536.0
+}
+func (uma *Uint16MantissaArray) Get10toPow(i int, additionalExp int) float64 {
+	return TenToPower(uma.data[i]) * Pows10[additionalExp]
 }
 
 func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
@@ -485,44 +505,42 @@ func circularMean(phases []KFloat) KFloat {
 }
 
 func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, peak int, harmonic int, residual int64) {
-	// If we-re not doing 1-2-5 harmonics, we'll just have to specify the harmonic as zero
+	if amount <= 0 {
+		return 0, 0, 0, 0
+	}
 	harmonic = 0
 
-	// log10(v) % 1 gives the position on the clock
-	e, lc := math.Modf(math.Log10(float64(amount)))
-	logCentroid := KFloat(lc)
-	if logCentroid < 0.0 {
-		logCentroid += 1.0
-		e -= 1.0
-	}
-	exp = int(e)
+	// 1. Get our 16-bit "Clock Position" and the integer Exponent
+	// This replaces Log10, Modf, and the < 0 check
+	dialPos, e := FastLog10FractionalAndExp(amount)
+	logCentroid := KFloat(dialPos) / 65536.0
+	exp = e
 
-	// Gemini's "Boss Slayer" fix...
+	// 2. Standard distance check (Now much faster with KFloat)
 	bestPeak := 0
 	lapShift := 0
-	_, minDiff := getLapAndDistance(logCentroid, KFloat(logCentroids.Get(0)))
-	minDiff = KFloat(math.Abs(float64(minDiff)))
+	_, minDiff := getLapAndDistance(logCentroid, logCentroids.Get(0))
+	if minDiff < 0 {
+		minDiff = -minDiff
+	}
 
 	for p := 1; p < logCentroids.Len(); p++ {
-		l, d := getLapAndDistance(logCentroid, KFloat(logCentroids.Get(p)))
-		absD := KFloat(math.Abs(float64(d)))
-		if absD < minDiff {
-			minDiff = absD
+		l, d := getLapAndDistance(logCentroid, logCentroids.Get(p))
+		if d < 0 {
+			d = -d
+		}
+		if d < minDiff {
+			minDiff = d
 			bestPeak = p
-			lapShift = l // This is the secret sauce
+			lapShift = l
 		}
 	}
 
-	// Adjust the exponent by the lap shift before reconstruction
-	adjustedExp := float64(exp) - float64(lapShift)
-
-	peakAmount := int64(math.Round(math.Pow(10, float64(logCentroids.Get(bestPeak))+adjustedExp)))
+	// 3. Reconstruction
+	adjustedExp := exp - lapShift
+	// Get10toPow now just does: Table[dial] * Pows10[exp]
+	peakAmount := int64(math.Round(logCentroids.Get10toPow(bestPeak, adjustedExp)))
 	residual = amount - peakAmount
-
-	// We return the ORIGINAL 'exp' because it represents the raw bit-magnitude of the satoshis.
-	// The lapshift is purely an internal correction to ensure our peak reconstruction
-	// doesn't  accidentally jump a power of 10 just because the clock hand crossed midnight.
-	// Returning 'AdjustedExp' would break the Huffman table lookups for the decoder
 
 	return
 }
@@ -763,3 +781,70 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	fmt.Printf("\tTODO! Considered %d txos (should be 3,244,970,783)\n", txosInChain)
 	return microEpochToPhasePeaks, nil
 }
+
+var (
+	log10FracLookup [2048]uint16
+	log10InitOnce   sync.Once
+)
+
+func BuildLog10Table() {
+	log10InitOnce.Do(func() {
+		for i := 0; i < 2048; i++ {
+			// Map the 11-bit fraction of the mantissa to its log10 fractional part
+			// We simulate a value between 1.0 and 2.0
+			val := 1.0 + (float64(i) / 2048.0)
+			frac := math.Log10(val)
+			log10FracLookup[i] = uint16(frac * 65536.0)
+		}
+	})
+}
+
+// FastLog10Fractional returns the uint16 "dial" position (0-65535)
+func FastLog10FractionalAndExp(s int64) (uint16, int) {
+	if s <= 0 {
+		return 0, 0
+	}
+
+	// 1. Get the leading bit (the power of 2)
+	// Go's bits.Len64(uint64(s)) is usually a single BSR instruction
+	leadingBit := bits.Len64(uint64(s))
+
+	// 2. Extract the next 11 bits after the leading bit as a lookup index
+	var index uint64
+	if leadingBit > 11 {
+		index = (uint64(s) >> (leadingBit - 12)) & 0x7FF
+	} else {
+		index = (uint64(s) << (11 - leadingBit)) & 0x7FF
+	}
+
+	// 3. Log10(s) = Log10(2^leadingBit * mantissa)
+	//             = leadingBit * Log10(2) + Log10(mantissa)
+	// Log10(2) is approx 0.301029995
+	const log10_2 = 0.3010299956639812
+
+	totalLog := float64(leadingBit-1)*log10_2 + (float64(log10FracLookup[index]) / 65536.0)
+	e, frac := math.Modf(totalLog)
+
+	return uint16(frac * 65536.0), int(e)
+}
+
+/*
+// Returns the 0-65535 dial position and the base-10 exponent
+func FastLog10FractionalAndExp(s int64) (uint16, int) {
+	// You can use the bits.Len64 logic from before
+	// but a simple way to get 'e' is:
+	e := 0
+	if s >= 100_000_000 {
+		s /= 100_000_000
+		e += 8
+	} // fast path for BTC
+	for s >= 10 {
+		s /= 10
+		e++
+	}
+
+	// Once s is < 10, the fractional part is just Log10(s)
+	// You can use a smaller lookup table for this
+	// or keep your existing Log10 if the setup isn't the bottleneck.
+}
+*/

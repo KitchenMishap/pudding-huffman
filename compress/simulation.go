@@ -289,6 +289,12 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 							continue
 						}
 
+						if amount == 0 {
+							// We don't want to count residuals for amount 0.
+							// It blows up the exp in ExpPeakResidual
+							continue
+						}
+
 						e, peak, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
 						combined := peak*3 + harmonic
 						atomic.AddInt64(&(TotalCombinedFreq[combined]), 1)
@@ -534,7 +540,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 										ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
 										if doPodium {
 											// 4 digit peak value in sats
-											digitsSats := int64(math.Round(math.Pow(10, float64(microEpochToPhasePeaks[microEpochID].Get(peakIdx))) * 1000))
+											digitsSats := int64(math.Round(microEpochToPhasePeaks[microEpochID].Get10toPow(peakIdx, 3)))
 											ghostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
 											ghostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
 											ghostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
@@ -572,7 +578,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 										riceGhostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
 										if doPodium {
 											// 4 digit peak value in sats
-											digitsSats := int64(math.Round(math.Pow(10, float64(microEpochToPhasePeaks[microEpochID].Get(peakIdx))) * 1000))
+											digitsSats := int64(math.Round(microEpochToPhasePeaks[microEpochID].Get10toPow(peakIdx, 3)))
 											riceGhostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
 											riceGhostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
 											riceGhostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
