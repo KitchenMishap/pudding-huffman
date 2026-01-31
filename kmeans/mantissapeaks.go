@@ -17,16 +17,122 @@ import (
 // Switch between float32 and float64 here
 type KFloat = float32
 
+type MantissaArray interface {
+	AsFloatSlice() []float64
+	AsKFloatSlice() []KFloat
+	Set(i int, v KFloat)
+	Len() int
+}
+
+type KFloatMantissaArray struct {
+	data []KFloat
+}
+
+// Check that implements
+var _ MantissaArray = (*KFloatMantissaArray)(nil)
+
+func NewKFloatMantissaArray(size int) *KFloatMantissaArray {
+	return &KFloatMantissaArray{make([]KFloat, size)}
+}
+func NewKFloatMantissaArrayFromFloats(a []float64) *KFloatMantissaArray {
+	result := NewKFloatMantissaArray(len(a))
+	for i, v := range a {
+		result.data[i] = KFloat(v)
+	}
+	return result
+}
+func (kma *KFloatMantissaArray) AsFloatSlice() []float64 {
+	result := make([]float64, len(kma.data))
+	for i, v := range kma.data {
+		result[i] = float64(v)
+	}
+	return result
+}
+func (kma *KFloatMantissaArray) AsKFloatSlice() []KFloat {
+	result := make([]KFloat, len(kma.data))
+	for i, v := range kma.data {
+		result[i] = v
+	}
+	return result
+}
+func (kma *KFloatMantissaArray) Len() int {
+	return len(kma.data)
+}
+func (kma *KFloatMantissaArray) Set(i int, v KFloat) {
+	kma.data[i] = v
+}
+
+type Uint16MantissaArray struct {
+	data []uint16
+}
+
+// Check that implements
+var _ MantissaArray = (*Uint16MantissaArray)(nil)
+
+func NewUint16MantissaArray(size int) *Uint16MantissaArray {
+	return &Uint16MantissaArray{make([]uint16, size)}
+}
+
+// Map Satoshi to the 0...65535 dial
+func NewUint16MantissaArrayFromSats(sats []int64) *Uint16MantissaArray {
+	arr := &Uint16MantissaArray{data: make([]uint16, len(sats))}
+	for i, s := range sats {
+		if s <= 0 {
+			arr.data[i] = 0
+			continue
+		}
+		// float64(uint16) conversion logic
+		lg := math.Log10(float64(s))
+		_, frac := math.Modf(lg)
+		if frac < 0 {
+			frac += 1.0
+		} // Handle negative logs (sats < 1)
+		arr.data[i] = uint16(frac * 65536.0)
+	}
+	return arr
+}
+
+func (uma *Uint16MantissaArray) AsFloatSlice() []float64 {
+	res := make([]float64, len(uma.data))
+	for i, v := range uma.data {
+		res[i] = float64(v) / 65536.0
+	}
+	return res
+}
+func (uma *Uint16MantissaArray) AsKFloatSlice() []KFloat {
+	res := make([]KFloat, len(uma.data))
+	for i, v := range uma.data {
+		res[i] = KFloat(v) / 65536.0
+	}
+	return res
+}
+func (uma *Uint16MantissaArray) Len() int {
+	return len(uma.data)
+}
+func (uma *Uint16MantissaArray) Set(i int, v KFloat) {
+	if v < 0.0 || v >= 1.0 {
+		panic("must be between 0.0 and 1.0")
+	}
+	uma.data[i] = uint16(v * 65536.0)
+}
+
 func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
-	phases := make([]KFloat, len(amounts))
+	phases := NewUint16MantissaArray(len(amounts))
 	for i, v := range amounts {
 		// log10(v) % 1 gives the position on the clock
 		_, ph := math.Modf(math.Log10(float64(v)))
-		phases[i] = KFloat(ph)
-		if phases[i] < 0.0 {
-			phases[i] += 1.0
+		kph := KFloat(ph)
+		if kph < 0.0 {
+			kph += 1.0
 		}
+		if kph >= 1.0 { // Can occur if a "very nearly 1.0" float64 rounds up to a KFloat of 1.0
+			if kph != 1.0 {
+				panic("didn't expect that")
+			}
+			kph -= 1.0
+		}
+		phases.Set(i, kph)
 	}
 
 	n := 4
@@ -59,7 +165,7 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 	return result
 }
 
-func FindBestAnchor(phases []KFloat, initialPeak KFloat) (bestAnchor KFloat, score KFloat) {
+func FindBestAnchor(phases MantissaArray, initialPeak KFloat) (bestAnchor KFloat, score KFloat) {
 	spokes := []KFloat{0.0, 0.30103, 0.69897} // log10 of 1, 2, 5
 
 	bestScore := KFloat(math.MaxFloat32)
@@ -70,7 +176,7 @@ func FindBestAnchor(phases []KFloat, initialPeak KFloat) (bestAnchor KFloat, sco
 		// We shift the anchor so the template aligns the initial peak with that spoke.
 		testAnchor := KFloat(math.Mod(float64(initialPeak)-float64(shift)+1.0, 1.0))
 
-		refined, currentBadness := refineAndScore(phases, testAnchor, spokes)
+		refined, currentBadness := refineAndScore(phases.AsKFloatSlice(), testAnchor, spokes)
 
 		if currentBadness < bestScore {
 			bestScore = currentBadness
