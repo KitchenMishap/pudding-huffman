@@ -8,6 +8,7 @@ import (
 	"github.com/KitchenMishap/pudding-huffman/compress"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"github.com/KitchenMishap/pudding-huffman/kmeans"
+	"github.com/KitchenMishap/pudding-huffman/residualencoder"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -393,22 +394,25 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("Huffman trees and rice codes for clockPhase residuals AT EACH EXP MAGNITUDE\n")
 			residualCodesSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
 			residualCodesRiceSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
+			huffmanEncoderByExp := [MAX_BASE_10_EXP]residualencoder.Huffman{}
 			for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
 				// 1) Build a specific fhuffman tree for this exponent (this was the original huffman-only codebase)
-				huffResidualRoot := huffman.BuildHuffmanTreeFromSlice(residualsSliceByExp[exp][:], compress.MaxResidual)
-				residualCodesThisExp := make(map[int64]huffman.BitCode)
-				huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesThisExp)
-				residualCodesSlicesByExp[exp] = huffmanMapToMidpointSlice(residualCodesThisExp, ESCAPE_VALUE)
+				huffmanEncoderByExp[exp].InitSlice(residualsSliceByExp[exp][:], compress.MaxResidual, ESCAPE_VALUE)
+				//huffResidualRoot := huffman.BuildHuffmanTreeFromSlice(residualsSliceByExp[exp][:], compress.MaxResidual)
+				//residualCodesThisExp := make(map[int64]huffman.BitCode)
+				//huffman.GenerateBitCodes(huffResidualRoot, 0, 0, residualCodesThisExp)
+				residualCodesSlicesByExp[exp] = residualencoder.HuffmanMapToMidpointSlice(huffmanEncoderByExp[exp].Map(), ESCAPE_VALUE)
 
 				// 2) Find the optimum Rice Offset (shortest huffman is best)
-				var bestOffset int64
-				minLen := 999
-				for r, code := range residualCodesThisExp {
-					if code.Length < minLen {
-						minLen = code.Length
-						bestOffset = r
-					}
-				}
+				/*				var bestOffset int64
+								minLen := 999
+								for r, code := range residualCodesThisExp {
+									if code.Length < minLen {
+										minLen = code.Length
+										bestOffset = r
+									}
+								}*/
+				bestOffset := huffmanEncoderByExp[exp].PopularVal()
 
 				// 3) Find the optimimum Rice K
 				// Heuristic: k = log2(mean(|centered_residuals|))
@@ -425,7 +429,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 					mean := float64(sumAbs) / float64(count)
 					optimalK = int(math.Max(0, math.Round(math.Log2(mean))))
 				}
-				residualCodesRiceSlicesByExp[exp] = huffmanMapToMidpointRiceSlice(residualCodesThisExp, ESCAPE_VALUE, optimalK)
+				residualCodesRiceSlicesByExp[exp] = huffmanMapToMidpointRiceSlice(huffmanEncoderByExp[exp].Map(), ESCAPE_VALUE, optimalK)
 			}
 			fmt.Printf("\tStatistics of why each map was truncated before being sent for Huffman encoding:\n")
 			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
@@ -521,49 +525,6 @@ func GetSensibleMaxCodes(exponent int) int {
 		return 1000000 // Your "Silliness" cap
 	}
 	return needed
-}
-
-func huffmanSliceMidpoint(length int) int { return length / 2 }
-
-// len(result) is odd
-// The midpoint (corresponding to a key of 0) is therefore at (len(result)-1)/2
-func huffmanMapToMidpointSlice(m map[int64]huffman.BitCode, escapeCode int64) []huffman.BitCode {
-	if len(m) == 0 {
-		return nil
-	}
-
-	// 1. Find the absolute furthest residual from zero
-	var maxAbs int64
-	for k := range m {
-		// escapeCode is a VERY LARGE number that deserves special treatment
-		if k != escapeCode {
-			absK := k
-			if absK < 0 {
-				absK = -absK
-			}
-			if absK > maxAbs {
-				maxAbs = absK
-			}
-		}
-	}
-
-	// 2. Safety cap to prevent "The Beast" from eating too much RAM
-	if maxAbs > compress.MaxResidual {
-		return nil
-	}
-
-	// 3. Create a slice that can hold [-maxAbs ... 0 ... +maxAbs]
-	// Size is 2 * maxAbs + 1. +1 is for the zero itself.
-	span := 2*maxAbs + 1
-	slice := make([]huffman.BitCode, span)
-
-	midpoint := maxAbs
-
-	for k, v := range m {
-		slice[midpoint+k] = v
-	}
-
-	return slice
 }
 
 // len(result) is odd
