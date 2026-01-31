@@ -353,10 +353,10 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 				dayCounter := meID
 				//TimeOfDay := meID % 24
 				year := 2009 + math.Round(100.0*(float64(dayCounter)/(52.1775*7.0)))/100.0
-				if len(microEpochToPhasePeaks[meID]) > 0 {
+				if microEpochToPhasePeaks[meID] != nil && microEpochToPhasePeaks[meID].Len() > 0 {
 					//				if TimeOfDay == 0 { // "One" timezone somewhere in the world
-					L := microEpochToPhasePeaks[meID][0]
-					val := math.Pow(10, -L)
+					L := microEpochToPhasePeaks[meID].Get(0)
+					val := math.Pow(10, -float64(L))
 					for val < 1000 {
 						val *= 10
 					}
@@ -373,7 +373,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 
 		for meID := 0; meID < int(microEpochs); meID++ {
 			// Sort the peaks for this epoch so Peak 0 is always the smallest phase
-			sort.Float64s(microEpochToPhasePeaks[meID])
+			//			sort.Float64s(microEpochToPhasePeaks[meID])	ToDo
 		}
 
 		if true {

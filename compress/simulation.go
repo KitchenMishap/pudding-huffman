@@ -197,7 +197,7 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	blocksPerMicroEpoch int64,
 	blocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
-	microEpochToPhasePeaks [][]float64,
+	microEpochToPhasePeaks []kmeans.MantissaArray,
 	max_base_10_exp int) (*[20][ResidualSliceWidth]int64, // First result: outer array index is the exponent (number of decimal zeros). Inner array is freq for each possible residual
 	*[MaxCombined]int64) { // Second result: frequencies of combined peak/harmonic index
 
@@ -283,7 +283,7 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 							continue
 						}
 
-						if microEpochToPhasePeaks[microEpochID] == nil || len(microEpochToPhasePeaks[microEpochID]) == 0 {
+						if microEpochToPhasePeaks[microEpochID] == nil || microEpochToPhasePeaks[microEpochID].Len() == 0 {
 							// This is probably an "early" week (epoch) where there weren't enough amount peaks to
 							// do the k-means analysis on (other than common "celebrity" amounts which bypass this already)
 							continue
@@ -360,7 +360,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	residualCodesSlicesByExp [][]huffman.BitCode,
 	magnitudeCodes map[int64]huffman.BitCode,
 	combinedCodes map[int64]huffman.BitCode,
-	microEpochToPhasePeaks [][]float64) (CompressionStats,
+	microEpochToPhasePeaks []kmeans.MantissaArray) (CompressionStats,
 	[][CSV_COLUMNS]int64,
 	*[2000000000]byte, // Which outputs of each transaction to exclude from next k-means peak detection
 	[]map[int64]bool) { // Which celebrities to exclude (per epoch) from next k-means peak detection
@@ -510,7 +510,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							ghostQuote := "?"
 							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
 							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
-							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && len(microEpochToPhasePeaks[microEpochID]) > 0 {
+							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && microEpochToPhasePeaks[microEpochID].Len() > 0 {
 								e, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
 								residualCodes := residualCodesSlicesByExp[e]
 								zeroOffset := (len(residualCodes) - 1) / 2
@@ -531,7 +531,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 										ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
 										if doPodium {
 											// 4 digit peak value in sats
-											digitsSats := int64(math.Round(math.Pow(10, microEpochToPhasePeaks[microEpochID][peakIdx]) * 1000))
+											digitsSats := int64(math.Round(math.Pow(10, float64(microEpochToPhasePeaks[microEpochID].Get(peakIdx))) * 1000))
 											ghostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
 											ghostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
 											ghostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"

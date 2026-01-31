@@ -21,6 +21,7 @@ type MantissaArray interface {
 	AsFloatSlice() []float64
 	AsKFloatSlice() []KFloat
 	Set(i int, v KFloat)
+	Get(i int) KFloat
 	Len() int
 	TryEstimateRiceBits(peak KFloat, k uint) (int64, bool)
 }
@@ -61,6 +62,9 @@ func (kma *KFloatMantissaArray) Len() int {
 }
 func (kma *KFloatMantissaArray) Set(i int, v KFloat) {
 	kma.data[i] = v
+}
+func (kma *KFloatMantissaArray) Get(i int) KFloat {
+	return kma.data[i]
 }
 func (kma *KFloatMantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
 	return -1, false // Not implemented flag
@@ -119,6 +123,10 @@ func (uma *Uint16MantissaArray) Set(i int, v KFloat) {
 	}
 	uma.data[i] = uint16(v * 65536.0)
 }
+func (uma *Uint16MantissaArray) Get(i int) KFloat {
+	v := uma.data[i]
+	return KFloat(v) / 65536.0
+}
 
 func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
 	var totalBits int64
@@ -141,7 +149,7 @@ func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64,
 	return totalBits, true
 }
 
-func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
+func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) MantissaArray {
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
 	phases := NewUint16MantissaArrayFromSats(amounts)
 
@@ -175,7 +183,7 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 	result = append(result, math.Mod(float64(bestPeak)+math.Log10(2), 1))
 	result = append(result, math.Mod(float64(bestPeak)+math.Log10(5), 1))
 
-	return result
+	return NewKFloatMantissaArrayFromFloats(result)
 }
 
 func FindBestAnchor(phases MantissaArray, initialPeak KFloat) (bestAnchor KFloat, score KFloat) {
@@ -469,7 +477,7 @@ func circularMean(phases []KFloat) KFloat {
 	return KFloat(avgPhase)
 }
 
-func ExpPeakResidual(amount int64, logCentroids []float64) (exp int, peak int, harmonic int, residual int64) {
+func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, peak int, harmonic int, residual int64) {
 	// If we-re not doing 1-2-5 harmonics, we'll just have to specify the harmonic as zero
 	harmonic = 0
 
@@ -485,11 +493,11 @@ func ExpPeakResidual(amount int64, logCentroids []float64) (exp int, peak int, h
 	// Gemini's "Boss Slayer" fix...
 	bestPeak := 0
 	lapShift := 0
-	_, minDiff := getLapAndDistance(logCentroid, KFloat(logCentroids[0]))
+	_, minDiff := getLapAndDistance(logCentroid, KFloat(logCentroids.Get(0)))
 	minDiff = KFloat(math.Abs(float64(minDiff)))
 
-	for p := 1; p < len(logCentroids); p++ {
-		l, d := getLapAndDistance(logCentroid, KFloat(logCentroids[p]))
+	for p := 1; p < logCentroids.Len(); p++ {
+		l, d := getLapAndDistance(logCentroid, KFloat(logCentroids.Get(p)))
 		absD := KFloat(math.Abs(float64(d)))
 		if absD < minDiff {
 			minDiff = absD
@@ -501,7 +509,7 @@ func ExpPeakResidual(amount int64, logCentroids []float64) (exp int, peak int, h
 	// Adjust the exponent by the lap shift before reconstruction
 	adjustedExp := float64(exp) - float64(lapShift)
 
-	peakAmount := int64(math.Round(math.Pow(10, logCentroids[bestPeak]+adjustedExp)))
+	peakAmount := int64(math.Round(math.Pow(10, float64(logCentroids.Get(bestPeak))+adjustedExp)))
 	residual = amount - peakAmount
 
 	// We return the ORIGINAL 'exp' because it represents the raw bit-magnitude of the satoshis.
@@ -522,7 +530,7 @@ func bucketCount(beans int64, beansPerBucket int64) int64 {
 func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator, blocks int64, blocksPerMicroEpoch int64,
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand,
 	transToExcludedOutput *[2000000000]byte,
-	epochToExcludedCelebs []map[int64]bool) ([][]float64, error) {
+	epochToExcludedCelebs []map[int64]bool) ([]MantissaArray, error) {
 
 	sJob := "Peak detection: PARALLEL by micro-epoch"
 	fmt.Printf("\t%s\n", sJob)
@@ -530,7 +538,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 
 	epochs := bucketCount(blocks, blocksPerEpoch)
 	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
-	microEpochToPhasePeaks := make([][]float64, microEpochs)
+	microEpochToPhasePeaks := make([]MantissaArray, microEpochs)
 	microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
 
 	microEpochsToTxos := make([]int64, microEpochs)
