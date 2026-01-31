@@ -22,6 +22,7 @@ type MantissaArray interface {
 	AsKFloatSlice() []KFloat
 	Set(i int, v KFloat)
 	Len() int
+	TryEstimateRiceBits(peak KFloat, k uint) (int64, bool)
 }
 
 type KFloatMantissaArray struct {
@@ -60,6 +61,9 @@ func (kma *KFloatMantissaArray) Len() int {
 }
 func (kma *KFloatMantissaArray) Set(i int, v KFloat) {
 	kma.data[i] = v
+}
+func (kma *KFloatMantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
+	return -1, false // Not implemented flag
 }
 
 type Uint16MantissaArray struct {
@@ -116,6 +120,27 @@ func (uma *Uint16MantissaArray) Set(i int, v KFloat) {
 	uma.data[i] = uint16(v * 65536.0)
 }
 
+func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
+	var totalBits int64
+	// Scale peak to our 0-65535 integer space
+	peakFixed := uint16(peak * 65536.0)
+
+	for _, val := range uma.data {
+		// 1. Integer distance with wrap-around
+		// e.g., if peak is 10 and val is 65530, distance is -16
+		diff := int16(val - peakFixed)
+
+		// 2. ZigZag encoding (maps 0->0, -1->1, 1->2, -2->3, 2->4)
+		// This puts the smallest residuals closest to zero for Rice coding
+		unsigned := uint16((diff << 1) ^ (diff >> 15))
+
+		// 3. Rice Bit Length:
+		// Quotient (unary) + 1 (stop bit) + k (remainder bits)
+		totalBits += int64(unsigned>>k) + 1 + int64(k)
+	}
+	return totalBits, true
+}
+
 func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
 	phases := NewUint16MantissaArrayFromSats(amounts)
@@ -156,14 +181,41 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 func FindBestAnchor(phases MantissaArray, initialPeak KFloat) (bestAnchor KFloat, score KFloat) {
 	spokes := []KFloat{0.0, 0.30103, 0.69897} // log10 of 1, 2, 5
 
+	// 1. Try the new Rice Method first
+	// We test a small range of k (Rice parameter) to find the most efficient fit
+	bestTotalBits := int64(math.MaxInt64)
+	var riceAnchor KFloat
+	supported := false
+
+	for _, shift := range spokes {
+		testAnchor := KFloat(math.Mod(float64(initialPeak)-float64(shift)+1.0, 1.0))
+
+		// Check if the current implementation can do high-speed bit estimation
+		// We try k=4 to k=10 (common ranges for these residuals)
+		for k := uint(4); k <= 10; k++ {
+			bits, ok := phases.TryEstimateRiceBits(testAnchor, k)
+			if !ok {
+				break // Fall back to torque method
+			}
+			supported = true
+			if bits < bestTotalBits {
+				bestTotalBits = bits
+				riceAnchor = testAnchor
+			}
+		}
+	}
+
+	if supported {
+		// Return the anchor that resulted in the fewest bits
+		return riceAnchor, KFloat(bestTotalBits)
+	}
+
+	// 2. Fallback: The original "Torque/Badness" method
 	bestScore := KFloat(math.MaxFloat32)
 	var absoluteBest KFloat
 
 	for _, shift := range spokes {
-		// Hypothesis: What if the initial peak is actually the '1', '2', or '5'?
-		// We shift the anchor so the template aligns the initial peak with that spoke.
 		testAnchor := KFloat(math.Mod(float64(initialPeak)-float64(shift)+1.0, 1.0))
-
 		refined, currentBadness := refineAndScore(phases.AsKFloatSlice(), testAnchor, spokes)
 
 		if currentBadness < bestScore {
@@ -221,6 +273,8 @@ func refineAndScore(phases []KFloat, startAnchor KFloat, spokes []KFloat) (KFloa
 			// Adjust the anchor by the average torque (the M-step)
 			//currentAnchor = math.Mod(currentAnchor+(totalTorque/validHits)+1.0, 1.0)
 			currentAnchor = KFloat(math.Mod(float64(currentAnchor-(totalTorque/validHits)+1.0), 1.0)) // Gemini test, reverse the torque
+			// Gemini now says change it back to a +...
+			currentAnchor = KFloat(math.Mod(float64(currentAnchor+(totalTorque/validHits)+1.0), 1.0)) // Gemini test, reverse the torque
 			if math.IsNaN(float64(currentAnchor)) {
 				return startAnchor, math.MaxFloat32
 			}
