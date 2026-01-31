@@ -112,6 +112,35 @@ func GenerateBitCodes(node *Node, currentBits uint64, depth int, table map[int64
 	}
 }
 
+func GenerateRiceBitCode(val uint64, k int) BitCode {
+	quotient := val >> k
+	totalLen := int(quotient + 1 + uint64(k))
+
+	// If it's too long for a uint64, we mark it as "invalid" or "literal-winner"
+	if totalLen > 64 {
+		return BitCode{Bits: 0, Length: 99} // 99 is a "poison pill" length
+	}
+
+	// Rice encoding: quotient 1s, followed by a 0, followed by k bits of remainder
+	// We'll build the bits from left to right (MSB to LSB)
+	var bits uint64
+
+	// 1. Set the quotient bits (1s)
+	// Example: quotient 3 -> 111...
+	for i := 0; i < int(quotient); i++ {
+		bits = (bits << 1) | 1
+	}
+
+	// 2. Set the stop bit (0)
+	bits = bits << 1
+
+	// 3. Set the remainder (k bits)
+	remainder := val & ((1 << k) - 1)
+	bits = (bits << k) | remainder
+
+	return BitCode{Bits: bits, Length: totalLen}
+}
+
 // --- Bit Manipulation & Concatenation ---
 
 func AppendBitCodes(a, b BitCode) BitCode {

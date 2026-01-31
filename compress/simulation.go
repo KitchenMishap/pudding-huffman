@@ -351,6 +351,8 @@ func bucketCount(beans int64, beansPerBucket int64) int64 {
 
 const CSV_COLUMNS = 3
 
+const GHOSTS_ARE_RICE = true
+
 func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator,
 	blocksPerEpoch int64,
 	blocksPerMicroEpoch int64,
@@ -358,6 +360,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	expCodes map[int64]huffman.BitCode,
 	residualCodesSlicesByExp [][]huffman.BitCode,
+	residualCodesRiceSlicesByExp [][]huffman.BitCode,
 	magnitudeCodes map[int64]huffman.BitCode,
 	combinedCodes map[int64]huffman.BitCode,
 	microEpochToPhasePeaks []kmeans.MantissaArray) (CompressionStats,
@@ -544,6 +547,44 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								}
 							}
 
+							riceGhostCode := bigCode
+							riceGhostQuote := "?"
+							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
+							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
+							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && microEpochToPhasePeaks[microEpochID].Len() > 0 {
+								e, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
+								residualCodes := residualCodesRiceSlicesByExp[e]
+								zeroOffset := (len(residualCodes) - 1) / 2
+								riceIndex := r + int64(zeroOffset)
+								if riceIndex < 0 || riceIndex >= int64(len(residualCodes)) {
+									// residual is too -ve or too +ve
+									// We won't be storing this as a ghost!
+								} else {
+									rCode := residualCodes[riceIndex]
+
+									// Now we have a HUFFMAN (yes) code for the combination of peak index and harmonic index.
+									// This is the initial cost...
+									combinedCode := combinedCodes[int64(3*peakIdx+harmonic)]
+									if peakIdx < CSV_COLUMNS {
+										//										local.peakStrengths[epochID][peakIdx]++ // Already done this for huffman ghosts
+									}
+									if eCode, ok := expCodes[int64(e)]; ok {
+										riceGhostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
+										if doPodium {
+											// 4 digit peak value in sats
+											digitsSats := int64(math.Round(math.Pow(10, float64(microEpochToPhasePeaks[microEpochID].Get(peakIdx))) * 1000))
+											riceGhostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
+											riceGhostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
+											riceGhostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
+											riceGhostQuote += strconv.FormatInt(int64(e-3), 10) + " and residual "
+											riceGhostQuote += strconv.FormatInt(r, 10)
+										}
+									} else {
+										panic("missing exp code")
+									}
+								}
+							}
+
 							// Stage 3: Magnitude-encoded Literal cost. Always available.
 							literalCode := bigCode
 							literalQuote := "?"
@@ -577,6 +618,10 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								choice = celebSelector
 								chosenCode = celebCode
 								chosenQuote = celebQuote
+							}
+							if GHOSTS_ARE_RICE {
+								ghostCode = riceGhostCode
+								ghostQuote = riceGhostQuote
 							}
 							if ghostCode.Length < chosenCode.Length {
 								choice = ghostSelector
