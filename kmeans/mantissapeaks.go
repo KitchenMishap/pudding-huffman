@@ -181,14 +181,14 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) MantissaArray
 	result := []float64{}
 
 	// fundamental times logs representing 1.0, 1.1, 1.2, ..., 9.9
-	//for i := float64(1.00); i < 10.00; i += 0.1 {
-	//	result = append(result, math.Mod(float64(bestPeak)+math.Log10(i), 1))
-	//}
+	for i := float64(1.00); i < 10.00; i += 0.1 {
+		result = append(result, math.Mod(float64(bestPeak)+math.Log10(i), 1))
+	}
 
 	// OR just 1,2,5
-	result = append(result, math.Mod(float64(bestPeak)+math.Log10(1), 1))
-	result = append(result, math.Mod(float64(bestPeak)+math.Log10(2), 1))
-	result = append(result, math.Mod(float64(bestPeak)+math.Log10(5), 1))
+	//result = append(result, math.Mod(float64(bestPeak)+math.Log10(1), 1))
+	//result = append(result, math.Mod(float64(bestPeak)+math.Log10(2), 1))
+	//result = append(result, math.Mod(float64(bestPeak)+math.Log10(5), 1))
 
 	return NewUint16MantissaArrayFromFloats(result)
 }
