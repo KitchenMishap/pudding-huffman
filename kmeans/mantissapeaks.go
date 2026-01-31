@@ -118,28 +118,16 @@ func (uma *Uint16MantissaArray) Set(i int, v KFloat) {
 
 func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) []float64 {
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
-	phases := NewUint16MantissaArray(len(amounts))
-	for i, v := range amounts {
-		// log10(v) % 1 gives the position on the clock
-		_, ph := math.Modf(math.Log10(float64(v)))
-		kph := KFloat(ph)
-		if kph < 0.0 {
-			kph += 1.0
-		}
-		if kph >= 1.0 { // Can occur if a "very nearly 1.0" float64 rounds up to a KFloat of 1.0
-			if kph != 1.0 {
-				panic("didn't expect that")
-			}
-			kph -= 1.0
-		}
-		phases.Set(i, kph)
-	}
+	phases := NewUint16MantissaArrayFromSats(amounts)
 
+	// Find some candidate peaks
 	n := 4
 	nPeaks := findEpochPeaks(amounts, n, deterministic)
 	if len(nPeaks) < n {
 		return nil
 	}
+
+	// Refine best peak based on a 1-2-5 pattern
 	bestPeak := nPeaks[0]
 	_, bestBadness := FindBestAnchor(phases, bestPeak)
 	for _, peak := range nPeaks {
