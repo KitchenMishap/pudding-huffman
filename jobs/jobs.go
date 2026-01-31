@@ -393,16 +393,16 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 
 			fmt.Printf("Huffman trees and rice codes for clockPhase residuals AT EACH EXP MAGNITUDE\n")
 			residualCodesSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
-			residualCodesRiceSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
+			residualCodesAltSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
 			huffmanEncoderByExp := [MAX_BASE_10_EXP]residualencoder.Huffman{}
-			riceEncoderByExp := [MAX_BASE_10_EXP]residualencoder.Rice{}
+			altEncoderByExp := [MAX_BASE_10_EXP]residualencoder.VarianceHuffman{}
 			for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
 				// 1) Build a specific fhuffman tree for this exponent (this was the original huffman-only codebase)
 				huffmanEncoderByExp[exp].InitSlice(residualsSliceByExp[exp][:], compress.MaxResidual, ESCAPE_VALUE)
 				residualCodesSlicesByExp[exp] = residualencoder.HuffmanMapToMidpointSlice(huffmanEncoderByExp[exp].Map(), ESCAPE_VALUE)
 
-				riceEncoderByExp[exp].InitSlice(residualsSliceByExp[exp][:], compress.MaxResidual, ESCAPE_VALUE)
-				residualCodesRiceSlicesByExp[exp] = riceEncoderByExp[exp].Slice()
+				altEncoderByExp[exp].InitSlice(residualsSliceByExp[exp][:], compress.MaxResidual, ESCAPE_VALUE)
+				residualCodesAltSlicesByExp[exp] = altEncoderByExp[exp].Slice()
 			}
 			fmt.Printf("\tStatistics of why each map was truncated before being sent for Huffman encoding:\n")
 			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
@@ -435,7 +435,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
 			result, microEpochToPeakStrengths, excludeTransOutputs, excludeCelebs = compress.ParallelSimulateCompressionWithKMeans(chain, handles,
 				blocksPerEpoch, blocksPerMicroEpoch, blocks,
-				epochToCelebCodes, expCodes, residualCodesSlicesByExp, residualCodesRiceSlicesByExp,
+				epochToCelebCodes, expCodes, residualCodesSlicesByExp, residualCodesAltSlicesByExp,
 				magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
 			jobElapsed := time.Since(tJob)
 			fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
