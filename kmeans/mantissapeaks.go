@@ -99,6 +99,13 @@ func NewUint16MantissaArrayFromSats(sats []int64) *Uint16MantissaArray {
 	}
 	return arr
 }
+func NewUint16MantissaArrayFromFloats(logFloats []float64) *Uint16MantissaArray {
+	arr := &Uint16MantissaArray{data: make([]uint16, len(logFloats))}
+	for i, frac := range logFloats {
+		arr.data[i] = uint16(frac * 65536.0)
+	}
+	return arr
+}
 
 func (uma *Uint16MantissaArray) AsFloatSlice() []float64 {
 	res := make([]float64, len(uma.data))
@@ -183,7 +190,7 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) MantissaArray
 	result = append(result, math.Mod(float64(bestPeak)+math.Log10(2), 1))
 	result = append(result, math.Mod(float64(bestPeak)+math.Log10(5), 1))
 
-	return NewKFloatMantissaArrayFromFloats(result)
+	return NewUint16MantissaArrayFromFloats(result)
 }
 
 func FindBestAnchor(phases MantissaArray, initialPeak KFloat) (bestAnchor KFloat, score KFloat) {
