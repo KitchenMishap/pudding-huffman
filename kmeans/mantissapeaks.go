@@ -508,9 +508,9 @@ func circularMean(phases []KFloat) KFloat {
 	return KFloat(avgPhase)
 }
 
-func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, peak int, harmonic int, residual int64) {
+func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, m int, peak int, harmonic int, residual int64) {
 	if amount <= 0 {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	harmonic = 0
 
@@ -519,6 +519,7 @@ func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, peak in
 	dialPos, e := FastLog10FractionalAndExp(amount)
 	logCentroid := KFloat(dialPos) / 65536.0
 	exp = e
+	m = int(logCentroid * 10) // A number for grouping amounts into 10 "log mantissa classe"
 
 	// 2. Standard distance check (Now much faster with KFloat)
 	bestPeak := 0

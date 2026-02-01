@@ -8,7 +8,6 @@ import (
 	"github.com/KitchenMishap/pudding-huffman/compress"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"github.com/KitchenMishap/pudding-huffman/kmeans"
-	"github.com/KitchenMishap/pudding-huffman/residualencoder"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -138,7 +137,9 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	}
 
 	blocks := latestBlock.Height() + 1
-	//blocks = 400_000
+	//128GB
+	//blocks = 300_000
+	fmt.Printf("** In this run, we are looking at %d blocks **\n", blocks)
 
 	elapsed = time.Since(startTime)
 	sJob := "Creating the celebrity histograms per epoch (PARALLEL by epoch)"
@@ -392,14 +393,6 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			combinedCodes := make(map[int64]huffman.BitCode)
 			huffman.GenerateBitCodes(huffCombinedRoot, 0, 0, combinedCodes)
 
-			fmt.Printf("Huffman trees and rice codes for clockPhase residuals AT EACH EXP MAGNITUDE\n")
-			residualCodesSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
-			residualCodesAltSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
-			for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
-				// 1) Build a specific fhuffman tree for this exponent (this was the original huffman-only codebase)
-				residualCodesSlicesByExp[exp] = residualencoder.HuffmanMapToMidpointSlice(residualsEncoderByExp[exp].Map(), ESCAPE_VALUE, compress.MaxResidual)
-				residualCodesAltSlicesByExp[exp] = residualencoder.HuffmanMapToMidpointSlice(altResidualsEncoderByExp[exp].Map(), ESCAPE_VALUE, compress.MaxResidual)
-			}
 			fmt.Printf("\tStatistics of why each map was truncated before being sent for Huffman encoding:\n")
 			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_0, reasonHist[0])
 			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_1, reasonHist[1])
@@ -431,7 +424,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
 			result, microEpochToPeakStrengths, excludeTransOutputs, excludeCelebs = compress.ParallelSimulateCompressionWithKMeans(chain, handles,
 				blocksPerEpoch, blocksPerMicroEpoch, blocks,
-				epochToCelebCodes, expCodes, residualCodesSlicesByExp, residualCodesAltSlicesByExp,
+				epochToCelebCodes, expCodes, residualsEncoderByExp, altResidualsEncoderByExp,
 				magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
 			jobElapsed := time.Since(tJob)
 			fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())

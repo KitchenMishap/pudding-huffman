@@ -44,6 +44,9 @@ func (r *Rice) Encode(val int64) huffman.BitCode {
 	if r.slice != nil {
 		zeroOffset := (len(r.slice) - 1) / 2
 		index := int64(zeroOffset) + val
+		if index < 0 || index >= int64(len(r.slice)) {
+			return huffman.BigCode()
+		}
 		return r.slice[index]
 	}
 	panic("!")

@@ -202,15 +202,15 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	blocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	microEpochToPhasePeaks []kmeans.MantissaArray,
-	max_base_10_exp int, escapeValue int64) ([]residualencoder.Encoder, // First result: by exp
-	[]residualencoder.Encoder, // Second result: by exp
+	max_base_10_exp int, escapeValue int64) (*[20][10]residualencoder.Encoder, // First result: by exp
+	*[20][10]residualencoder.Encoder, // Second result: by exp
 	*[MaxCombined]int64) { // Second result: frequencies of combined peak/harmonic index
 
 	// TotalResidualFreqs is a flat array of all possible residuals
 	if max_base_10_exp != 20 {
 		panic("You changed a constant!")
 	}
-	var TotalResidualFreqsByExp = [20][ResidualSliceWidth]int64{}
+	var TotalResidualFreqsByExp = [20][10][ResidualSliceWidth]int64{}
 	var TotalCombinedFreq = [MaxCombined]int64{}
 
 	tJob := time.Now()
@@ -300,14 +300,14 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 							continue
 						}
 
-						e, peak, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
+						e, m, peak, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
 						combined := peak*3 + harmonic
 						atomic.AddInt64(&(TotalCombinedFreq[combined]), 1)
 
 						if e >= 0 && e < max_base_10_exp {
 							if r >= -MaxResidual && r <= MaxResidual {
 								const zeroOffset = MaxResidual
-								atomic.AddInt64(&(TotalResidualFreqsByExp[e][r+zeroOffset]), 1)
+								atomic.AddInt64(&(TotalResidualFreqsByExp[e][m][r+zeroOffset]), 1)
 							}
 						}
 					}
@@ -360,28 +360,33 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	if max_base_10_exp != 20 {
 		panic("You changed a constant!")
 	}
-	residualEncoders := make([]residualencoder.Encoder, 20)
-	altResidualEncoders := make([]residualencoder.Encoder, 20)
+	residualEncoders := [20][10]residualencoder.Encoder{}
+	altResidualEncoders := [20][10]residualencoder.Encoder{}
+	mFor5 := 7 // Because log10(5) = 0.7
 	for exp := 0; exp < 20; exp++ {
-		residualEncoders[exp] = &residualencoder.Huffman{}
-		residualEncoders[exp].InitSlice(TotalResidualFreqsByExp[exp][:], MaxResidual, escapeValue, MaxResidual)
-		altResidualEncoders[exp] = &residualencoder.VarianceHuffman{}
-		altResidualEncoders[exp].InitSlice(TotalResidualFreqsByExp[exp][:], MaxResidual, escapeValue, MaxResidual)
-		variance := altResidualEncoders[exp].Variance()
+		for m := 0; m < 10; m++ {
+			residualEncoders[exp][m] = &residualencoder.Huffman{}
+			residualEncoders[exp][m].InitSlice(TotalResidualFreqsByExp[exp][m][:], MaxResidual, escapeValue, MaxResidual)
+			altResidualEncoders[exp][m] = &residualencoder.VarianceHuffman{}
+			altResidualEncoders[exp][m].InitSlice(TotalResidualFreqsByExp[exp][m][:], MaxResidual, escapeValue, MaxResidual)
 
-		sigma := math.Sqrt(float64(variance))
-		coverage70 := 1.036 * sigma
-		// Calculate a representative peak for the printout
-		peakExample := math.Pow(10, float64(exp)) * 5
-		p := message.NewPrinter(language.English) // For commas between thousands
-		p.Printf("Exp %2d: [Peak ~%12.0f] 70%% of residuals are within ±%.0f sats (Sigma: %.2f)\n",
-			exp, peakExample, coverage70, sigma)
+			if m == mFor5 {
+				variance := altResidualEncoders[exp][m].Variance()
+				sigma := math.Sqrt(float64(variance))
+				coverage70 := 1.036 * sigma
+				// Calculate a representative peak for the printout
+				peakExample := math.Pow(10, float64(exp)) * 5
+				p := message.NewPrinter(language.English) // For commas between thousands
+				p.Printf("Exp %2d: [Peak ~%12.0f] 70%% of residuals are within ±%.0f sats (Sigma: %.2f, sigma is %.1f%% of peak)\n",
+					exp, peakExample, coverage70, sigma, 100*sigma/peakExample)
+			}
+		}
 	}
 
 	jobElapsed = time.Since(tJob)
 	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
-	return residualEncoders, altResidualEncoders, &TotalCombinedFreq
+	return &residualEncoders, &altResidualEncoders, &TotalCombinedFreq
 }
 
 func bucketCount(beans int64, beansPerBucket int64) int64 {
@@ -398,8 +403,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	blocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	expCodes map[int64]huffman.BitCode,
-	residualCodesSlicesByExp [][]huffman.BitCode,
-	residualCodesRiceSlicesByExp [][]huffman.BitCode,
+	residualEncoderByExpM *[20][10]residualencoder.Encoder,
+	altResidualEncoderByExpM *[20][10]residualencoder.Encoder,
 	magnitudeCodes map[int64]huffman.BitCode,
 	combinedCodes map[int64]huffman.BitCode,
 	microEpochToPhasePeaks []kmeans.MantissaArray) (CompressionStats,
@@ -553,15 +558,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
 							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
 							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && microEpochToPhasePeaks[microEpochID].Len() > 0 {
-								e, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
-								residualCodes := residualCodesSlicesByExp[e]
-								zeroOffset := (len(residualCodes) - 1) / 2
-								huffmanIndex := r + int64(zeroOffset)
-								if huffmanIndex < 0 || huffmanIndex >= int64(len(residualCodes)) {
-									// residual is too -ve or too +ve
-									// We won't be storing this as a ghost!
-								} else {
-									rCode := residualCodes[huffmanIndex]
+								e, m, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
+								{
+									rCode := residualEncoderByExpM[e][m].Encode(r)
 
 									// Now we have a huffman code for the combination of peak index and harmonic index.
 									// This is the initial cost...
@@ -591,15 +590,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
 							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
 							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && microEpochToPhasePeaks[microEpochID].Len() > 0 {
-								e, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
-								residualCodes := residualCodesRiceSlicesByExp[e]
-								zeroOffset := (len(residualCodes) - 1) / 2
-								riceIndex := r + int64(zeroOffset)
-								if riceIndex < 0 || riceIndex >= int64(len(residualCodes)) {
-									// residual is too -ve or too +ve
-									// We won't be storing this as a ghost!
-								} else {
-									rCode := residualCodes[riceIndex]
+								e, m, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
+								{
+									rCode := altResidualEncoderByExpM[e][m].Encode(r)
 
 									// Now we have a HUFFMAN (yes) code for the combination of peak index and harmonic index.
 									// This is the initial cost...

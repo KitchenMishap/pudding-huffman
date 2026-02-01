@@ -29,6 +29,9 @@ func (h *Huffman) Encode(val int64) huffman.BitCode {
 	if h.codesSlice != nil {
 		zeroOffset := (len(h.codesSlice) - 1) / 2
 		index := int64(zeroOffset) + val
+		if index < 0 || index >= int64(len(h.codesSlice)) {
+			return huffman.BigCode()
+		}
 		return h.codesSlice[index]
 	}
 	return h.codes[val]

@@ -19,6 +19,8 @@ type BitCode struct {
 	Length int
 }
 
+func BigCode() BitCode { return BitCode{0, 999} }
+
 // String returns the binary representation (e.g., "0011")
 func (bc BitCode) String() string {
 	if bc.Length == 0 {

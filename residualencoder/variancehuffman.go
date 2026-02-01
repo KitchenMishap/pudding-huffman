@@ -37,6 +37,9 @@ func (vh *VarianceHuffman) Encode(val int64) huffman.BitCode {
 	if vh.codesSlice != nil {
 		zeroOffset := (len(vh.codesSlice) - 1) / 2
 		index := int64(zeroOffset) + val
+		if index < 0 || index >= int64(len(vh.codesSlice)) {
+			return huffman.BigCode()
+		}
 		return vh.codesSlice[index]
 	}
 	return vh.codes[val]
