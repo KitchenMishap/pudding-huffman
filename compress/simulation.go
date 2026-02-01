@@ -203,7 +203,6 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	microEpochToPhasePeaks []kmeans.MantissaArray,
 	max_base_10_exp int, escapeValue int64) (*[20][10]residualencoder.Encoder, // First result: by exp
-	*[20][10]residualencoder.Encoder, // Second result: by exp
 	*[MaxCombined]int64) { // Second result: frequencies of combined peak/harmonic index
 
 	// TotalResidualFreqs is a flat array of all possible residuals
@@ -354,39 +353,57 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
 	tJob = time.Now()
-	sJob = "Stage 1.6, Build the Huffman trees for a variance at each exp (SERIAL)"
+	sJob = "Stage 1.6, Build the Huffman trees for a variance at each exp (NOW PARALLEL)"
 	fmt.Printf("%s\n", sJob)
 
 	if max_base_10_exp != 20 {
 		panic("You changed a constant!")
 	}
 	residualEncoders := [20][10]residualencoder.Encoder{}
-	altResidualEncoders := [20][10]residualencoder.Encoder{}
 	mFor5 := 7 // Because log10(5) = 0.7
+
+	// Instead of a nested serial loop
+	mu := sync.Mutex{}
+	expToReport := [20]string{}
+	gg, _ := errgroup.WithContext(context.Background())
 	for exp := 0; exp < 20; exp++ {
 		for m := 0; m < 10; m++ {
-			residualEncoders[exp][m] = &residualencoder.Huffman{}
-			residualEncoders[exp][m].InitSlice(TotalResidualFreqsByExp[exp][m][:], MaxResidual, escapeValue, MaxResidual)
-			altResidualEncoders[exp][m] = &residualencoder.VarianceHuffman{}
-			altResidualEncoders[exp][m].InitSlice(TotalResidualFreqsByExp[exp][m][:], MaxResidual, escapeValue, MaxResidual)
-
-			if m == mFor5 {
-				variance := altResidualEncoders[exp][m].Variance()
-				sigma := math.Sqrt(float64(variance))
-				coverage70 := 1.036 * sigma
-				// Calculate a representative peak for the printout
-				peakExample := math.Pow(10, float64(exp)) * 5
-				p := message.NewPrinter(language.English) // For commas between thousands
-				p.Printf("Exp %2d: [Peak ~%12.0f] 70%% of residuals are within ±%.0f sats (Sigma: %.2f, sigma is %.1f%% of peak)\n",
-					exp, peakExample, coverage70, sigma, 100*sigma/peakExample)
-			}
+			e, localM := exp, m // Capture variables
+			gg.Go(func() error {
+				// Build tree [e][localM] here
+				residualEncoders[e][localM] = &residualencoder.VarianceHuffman{}
+				residualEncoders[e][localM].InitSlice(TotalResidualFreqsByExp[e][localM][:], MaxResidual, escapeValue, MaxResidual)
+				if localM == mFor5 {
+					variance := residualEncoders[e][localM].Variance()
+					sigma := math.Sqrt(float64(variance))
+					coverage70 := 1.036 * sigma
+					// Calculate a representative peak for the printout
+					peakExample := math.Pow(10, float64(e)) * 5
+					p := message.NewPrinter(language.English) // For commas between thousands
+					s := ""
+					s = p.Sprintf("Exp %2d: [Peak ~%12.0f] 70%% of residuals are within ±%.0f sats (Sigma: %.2f, sigma is %.1f%% of peak)",
+						e, peakExample, coverage70, sigma, 100*sigma/peakExample)
+					mu.Lock()
+					expToReport[e] = s
+					mu.Unlock()
+				}
+				return nil
+			})
 		}
+	}
+	gg.Wait()
+
+	for e := 0; e < 20; e++ {
+		if e%6 == 0 {
+			fmt.Printf("\n")
+		}
+		fmt.Printf("%s\n", expToReport[e])
 	}
 
 	jobElapsed = time.Since(tJob)
 	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
-	return &residualEncoders, &altResidualEncoders, &TotalCombinedFreq
+	return &residualEncoders, &TotalCombinedFreq
 }
 
 func bucketCount(beans int64, beansPerBucket int64) int64 {
@@ -395,8 +412,6 @@ func bucketCount(beans int64, beansPerBucket int64) int64 {
 
 const CSV_COLUMNS = 3
 
-const GHOSTS_ARE_RICE = true
-
 func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator,
 	blocksPerEpoch int64,
 	blocksPerMicroEpoch int64,
@@ -404,7 +419,6 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	expCodes map[int64]huffman.BitCode,
 	residualEncoderByExpM *[20][10]residualencoder.Encoder,
-	altResidualEncoderByExpM *[20][10]residualencoder.Encoder,
 	magnitudeCodes map[int64]huffman.BitCode,
 	combinedCodes map[int64]huffman.BitCode,
 	microEpochToPhasePeaks []kmeans.MantissaArray) (CompressionStats,
@@ -585,38 +599,6 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								}
 							}
 
-							riceGhostCode := bigCode
-							riceGhostQuote := "?"
-							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
-							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
-							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && microEpochToPhasePeaks[microEpochID].Len() > 0 {
-								e, m, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
-								{
-									rCode := altResidualEncoderByExpM[e][m].Encode(r)
-
-									// Now we have a HUFFMAN (yes) code for the combination of peak index and harmonic index.
-									// This is the initial cost...
-									combinedCode := combinedCodes[int64(3*peakIdx+harmonic)]
-									if peakIdx < CSV_COLUMNS {
-										//										local.peakStrengths[epochID][peakIdx]++ // Already done this for huffman ghosts
-									}
-									if eCode, ok := expCodes[int64(e)]; ok {
-										riceGhostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
-										if doPodium {
-											// 4 digit peak value in sats
-											digitsSats := int64(math.Round(microEpochToPhasePeaks[microEpochID].Get10toPow(peakIdx, 3)))
-											riceGhostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
-											riceGhostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
-											riceGhostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
-											riceGhostQuote += strconv.FormatInt(int64(e-3), 10) + " and residual "
-											riceGhostQuote += strconv.FormatInt(r, 10)
-										}
-									} else {
-										panic("missing exp code")
-									}
-								}
-							}
-
 							// Stage 3: Magnitude-encoded Literal cost. Always available.
 							literalCode := bigCode
 							literalQuote := "?"
@@ -650,10 +632,6 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								choice = celebSelector
 								chosenCode = celebCode
 								chosenQuote = celebQuote
-							}
-							if GHOSTS_ARE_RICE {
-								ghostCode = riceGhostCode
-								ghostQuote = riceGhostQuote
 							}
 							if ghostCode.Length < chosenCode.Length {
 								choice = ghostSelector

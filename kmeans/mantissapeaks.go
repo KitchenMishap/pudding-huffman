@@ -180,7 +180,7 @@ func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64,
 	return totalBits, true
 }
 
-func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) MantissaArray {
+func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode string) MantissaArray {
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
 	phases := NewUint16MantissaArrayFromSats(amounts)
 
@@ -204,15 +204,28 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand) MantissaArray
 
 	result := []float64{}
 
-	// fundamental times logs representing 1.0, 1.1, 1.2, ..., 9.9
-	for i := float64(1.00); i < 10.00; i += 0.1 {
-		result = append(result, math.Mod(float64(bestPeak)+math.Log10(i), 1))
+	spokeInc := float64(0)
+	if spokesMode == "9 spokes" {
+		spokeInc = 1.0
+	}
+	if spokesMode == "90 spokes" {
+		spokeInc = 0.1
+	}
+	if spokesMode == "900 spokes" {
+		spokeInc = 0.01
 	}
 
-	// OR just 1,2,5
-	//result = append(result, math.Mod(float64(bestPeak)+math.Log10(1), 1))
-	//result = append(result, math.Mod(float64(bestPeak)+math.Log10(2), 1))
-	//result = append(result, math.Mod(float64(bestPeak)+math.Log10(5), 1))
+	if spokeInc > 0 {
+		for i := float64(1.00); i < 10.00; i += 0.1 {
+			result = append(result, math.Mod(float64(bestPeak)+math.Log10(i), 1))
+		}
+	} else if spokesMode == "1-2-5 spokes" {
+		result = append(result, math.Mod(float64(bestPeak)+math.Log10(1), 1))
+		result = append(result, math.Mod(float64(bestPeak)+math.Log10(2), 1))
+		result = append(result, math.Mod(float64(bestPeak)+math.Log10(5), 1))
+	} else {
+		panic("illegal spokesMode")
+	}
 
 	return NewUint16MantissaArrayFromFloats(result)
 }
@@ -560,7 +573,7 @@ func bucketCount(beans int64, beansPerBucket int64) int64 {
 func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator, blocks int64, blocksPerMicroEpoch int64,
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand,
 	transToExcludedOutput *[2000000000]byte,
-	epochToExcludedCelebs []map[int64]bool) ([]MantissaArray, error) {
+	epochToExcludedCelebs []map[int64]bool, spokesMode string) ([]MantissaArray, error) {
 
 	sJob := "Peak detection: PARALLEL by micro-epoch"
 	fmt.Printf("\t%s\n", sJob)
@@ -602,7 +615,6 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 			default:
 			}
 
-			// Rest of my logic...
 			buffer := make([]int64, 0, 5000)
 
 			// Create a local source unique to THIS epoch
@@ -758,7 +770,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 					microEpochToPhasePeaks[me] = nil
 				} else {
 					// This is the heavy lifting
-					microEpochToPhasePeaks[me] = FindEpochPeaksMain(buffer, localRand)
+					microEpochToPhasePeaks[me] = FindEpochPeaksMain(buffer, localRand, spokesMode)
 				}
 			} // for micro epochs
 

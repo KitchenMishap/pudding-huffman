@@ -137,20 +137,22 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	}
 
 	blocks := latestBlock.Height() + 1
-	//128GB
 	//blocks = 300_000
 	fmt.Printf("** In this run, we are looking at %d blocks **\n", blocks)
-
-	elapsed = time.Since(startTime)
-	sJob := "Creating the celebrity histograms per epoch (PARALLEL by epoch)"
-	tJob := time.Now()
-	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
-
+	sSpokes := "9 spokes"
+	fmt.Printf("** In this run, we are using %s **\n", sSpokes)
 	//const blocksPerEpoch = 144 * 7 // Roughly a week
 	//const blocksPerMicroEpoch = 6  // Roughly an hour
 	const blocksPerEpoch = 144 * 28    // Roughly a month
 	const blocksPerMicroEpoch = 6 * 24 // Roughly a day
 	numEpochs := bucketCount(blocks, blocksPerEpoch)
+	fmt.Printf("** In this run, there are %d blocks in a micro-epoch **\n", blocksPerMicroEpoch)
+	fmt.Printf("** In this run, there are %d blocks in an epoch **\n", blocksPerEpoch)
+
+	elapsed = time.Since(startTime)
+	sJob := "Creating the celebrity histograms per epoch (PARALLEL by epoch)"
+	tJob := time.Now()
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
 
 	workersDivider := 1
 	numWorkers := runtime.NumCPU() / workersDivider
@@ -188,7 +190,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 				}
 
 				// --- WORKER LOGIC START ---
-				localMap := make(map[int64]int64)
+				localMap := make(map[int64]int64) // ToDo initial size?
 
 				startBlock := int64(eID * blocksPerEpoch)
 				endBlock := startBlock + blocksPerEpoch
@@ -284,7 +286,6 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 					continue
 				}
 
-				// --- THE ACTUAL LOGIC ---
 				captureCoverage := 0.7
 				epochCelebsTruncated, reason := TruncateMapWithEscapeCode(
 					epochToCelebsMap[eID], 100000, captureCoverage, ESCAPE_VALUE,
@@ -339,7 +340,8 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 		fmt.Printf("\t==== Pass %d ====\n", pass)
 
 		microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, blocks, blocksPerMicroEpoch,
-			epochToCelebCodes, blocksPerEpoch, deterministic, excludeTransOutputs, excludeCelebs)
+			epochToCelebCodes, blocksPerEpoch, deterministic, excludeTransOutputs, excludeCelebs,
+			sSpokes)
 		if err != nil {
 			return err
 		}
@@ -383,7 +385,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "Build residuals map (PARALLEL per exp) ")
 
 			//residualsSliceByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
-			residualsEncoderByExp, altResidualsEncoderByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP, ESCAPE_VALUE)
+			residualsEncoderByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP, ESCAPE_VALUE)
 
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
@@ -424,7 +426,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), sJob)
 			result, microEpochToPeakStrengths, excludeTransOutputs, excludeCelebs = compress.ParallelSimulateCompressionWithKMeans(chain, handles,
 				blocksPerEpoch, blocksPerMicroEpoch, blocks,
-				epochToCelebCodes, expCodes, residualsEncoderByExp, altResidualsEncoderByExp,
+				epochToCelebCodes, expCodes, residualsEncoderByExp,
 				magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
 			jobElapsed := time.Since(tJob)
 			fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
