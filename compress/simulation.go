@@ -718,6 +718,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 				}
 			}
 			resultsChan <- local
+			runtime.Gosched()
 			return nil
 		})
 	}
