@@ -9,6 +9,7 @@ type VarianceHuffman struct {
 	root       *huffman.Node
 	codes      map[int64]huffman.BitCode
 	codesSlice []huffman.BitCode
+	variance   int64
 }
 
 // Check that implements
@@ -20,15 +21,17 @@ func (vh *VarianceHuffman) Init(freqMap map[int64]int64) {
 	vh.root = huffman.BuildHuffmanTree(fakeFreq)
 	vh.codes = make(map[int64]huffman.BitCode)
 	huffman.GenerateBitCodes(vh.root, 0, 0, vh.codes)
+	vh.variance = variance
 }
-func (vh *VarianceHuffman) InitSlice(freqSlice []int64, offset int, escapeVal int64) {
+func (vh *VarianceHuffman) InitSlice(freqSlice []int64, offset int, escapeVal int64, maxResidual int64) {
 	mean := offset
 	variance := VarianceSlice(freqSlice, int64(offset), escapeVal)
 	fakeSlice := FakeFreqSlice(int64(mean), variance)
 	vh.root = huffman.BuildHuffmanTreeFromSlice(fakeSlice, offset)
 	vh.codes = make(map[int64]huffman.BitCode)
 	huffman.GenerateBitCodes(vh.root, 0, 0, vh.codes)
-	vh.codesSlice = HuffmanMapToMidpointSlice(vh.codes, escapeVal)
+	vh.codesSlice = HuffmanMapToMidpointSlice(vh.codes, escapeVal, maxResidual)
+	vh.variance = variance
 }
 func (vh *VarianceHuffman) Encode(val int64) huffman.BitCode {
 	if vh.codesSlice != nil {
@@ -161,3 +164,5 @@ func FakeFreqSlice(mean, variance int64) []int64 {
 	}
 	return fakeSlice
 }
+
+func (vh *VarianceHuffman) Variance() int64 { return vh.variance }

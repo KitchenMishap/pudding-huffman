@@ -1,7 +1,6 @@
 package residualencoder
 
 import (
-	"github.com/KitchenMishap/pudding-huffman/compress"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"math"
 )
@@ -18,9 +17,9 @@ func (r *Rice) Init(freqMap map[int64]int64) {
 	r.huffman = Huffman{}
 	r.huffman.Init(freqMap)
 }
-func (r *Rice) InitSlice(freqSlice []int64, offset int, escapeVal int64) {
+func (r *Rice) InitSlice(freqSlice []int64, offset int, escapeVal int64, maxResidual int64) {
 	r.huffman = Huffman{}
-	r.huffman.InitSlice(freqSlice, offset, escapeVal)
+	r.huffman.InitSlice(freqSlice, offset, escapeVal, maxResidual)
 
 	bestOffset := r.huffman.PopularVal()
 
@@ -39,7 +38,7 @@ func (r *Rice) InitSlice(freqSlice []int64, offset int, escapeVal int64) {
 		mean := float64(sumAbs) / float64(count)
 		optimalK = int(math.Max(0, math.Round(math.Log2(mean))))
 	}
-	r.slice = huffmanMapToMidpointRiceSlice(r.huffman.Map(), escapeVal, optimalK)
+	r.slice = huffmanMapToMidpointRiceSlice(r.huffman.Map(), escapeVal, optimalK, maxResidual)
 }
 func (r *Rice) Encode(val int64) huffman.BitCode {
 	if r.slice != nil {
@@ -61,7 +60,7 @@ func (r *Rice) Slice() []huffman.BitCode {
 
 // len(result) is odd
 // The midpoint (corresponding to a key of 0) is therefore at (len(result)-1)/2
-func huffmanMapToMidpointRiceSlice(m map[int64]huffman.BitCode, escapeCode int64, kForRice int) []huffman.BitCode {
+func huffmanMapToMidpointRiceSlice(m map[int64]huffman.BitCode, escapeCode int64, kForRice int, maxResidual int64) []huffman.BitCode {
 	if len(m) == 0 {
 		return nil
 	}
@@ -82,7 +81,7 @@ func huffmanMapToMidpointRiceSlice(m map[int64]huffman.BitCode, escapeCode int64
 	}
 
 	// 2. Safety cap to prevent "The Beast" from eating too much RAM
-	if maxAbs > compress.MaxResidual {
+	if maxAbs > maxResidual {
 		return nil
 	}
 
@@ -100,3 +99,4 @@ func huffmanMapToMidpointRiceSlice(m map[int64]huffman.BitCode, escapeCode int64
 
 	return slice
 }
+func (r *Rice) Variance() int64 { return -1 }

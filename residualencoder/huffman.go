@@ -1,7 +1,6 @@
 package residualencoder
 
 import (
-	"github.com/KitchenMishap/pudding-huffman/compress"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"math"
 )
@@ -20,11 +19,11 @@ func (h *Huffman) Init(freqMap map[int64]int64) {
 	h.codes = make(map[int64]huffman.BitCode)
 	huffman.GenerateBitCodes(h.root, 0, 0, h.codes)
 }
-func (h *Huffman) InitSlice(freqSlice []int64, offset int, escapeVal int64) {
+func (h *Huffman) InitSlice(freqSlice []int64, offset int, escapeVal int64, maxResidual int64) {
 	h.root = huffman.BuildHuffmanTreeFromSlice(freqSlice, offset)
 	h.codes = make(map[int64]huffman.BitCode)
 	huffman.GenerateBitCodes(h.root, 0, 0, h.codes)
-	h.codesSlice = HuffmanMapToMidpointSlice(h.codes, escapeVal)
+	h.codesSlice = HuffmanMapToMidpointSlice(h.codes, escapeVal, maxResidual)
 }
 func (h *Huffman) Encode(val int64) huffman.BitCode {
 	if h.codesSlice != nil {
@@ -65,7 +64,7 @@ func huffmanSliceMidpoint(length int) int { return length / 2 }
 
 // len(result) is odd
 // The midpoint (corresponding to a key of 0) is therefore at (len(result)-1)/2
-func HuffmanMapToMidpointSlice(m map[int64]huffman.BitCode, escapeCode int64) []huffman.BitCode {
+func HuffmanMapToMidpointSlice(m map[int64]huffman.BitCode, escapeCode int64, maxResidual int64) []huffman.BitCode {
 	if len(m) == 0 {
 		return nil
 	}
@@ -86,7 +85,7 @@ func HuffmanMapToMidpointSlice(m map[int64]huffman.BitCode, escapeCode int64) []
 	}
 
 	// 2. Safety cap to prevent "The Beast" from eating too much RAM
-	if maxAbs > compress.MaxResidual {
+	if maxAbs > maxResidual {
 		return nil
 	}
 
@@ -103,3 +102,4 @@ func HuffmanMapToMidpointSlice(m map[int64]huffman.BitCode, escapeCode int64) []
 
 	return slice
 }
+func (h *Huffman) Variance() int64 { return -1 }

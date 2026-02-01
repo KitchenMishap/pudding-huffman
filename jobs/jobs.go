@@ -381,7 +381,8 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "Build residuals map (PARALLEL per exp) ")
 
-			residualsSliceByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
+			//residualsSliceByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP)
+			residualsEncoderByExp, altResidualsEncoderByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, blocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP, ESCAPE_VALUE)
 
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
@@ -394,15 +395,10 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("Huffman trees and rice codes for clockPhase residuals AT EACH EXP MAGNITUDE\n")
 			residualCodesSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
 			residualCodesAltSlicesByExp := make([][]huffman.BitCode, MAX_BASE_10_EXP)
-			huffmanEncoderByExp := [MAX_BASE_10_EXP]residualencoder.Huffman{}
-			altEncoderByExp := [MAX_BASE_10_EXP]residualencoder.VarianceHuffman{}
 			for exp := 0; exp < MAX_BASE_10_EXP; exp++ {
 				// 1) Build a specific fhuffman tree for this exponent (this was the original huffman-only codebase)
-				huffmanEncoderByExp[exp].InitSlice(residualsSliceByExp[exp][:], compress.MaxResidual, ESCAPE_VALUE)
-				residualCodesSlicesByExp[exp] = residualencoder.HuffmanMapToMidpointSlice(huffmanEncoderByExp[exp].Map(), ESCAPE_VALUE)
-
-				altEncoderByExp[exp].InitSlice(residualsSliceByExp[exp][:], compress.MaxResidual, ESCAPE_VALUE)
-				residualCodesAltSlicesByExp[exp] = altEncoderByExp[exp].Slice()
+				residualCodesSlicesByExp[exp] = residualencoder.HuffmanMapToMidpointSlice(residualsEncoderByExp[exp].Map(), ESCAPE_VALUE, compress.MaxResidual)
+				residualCodesAltSlicesByExp[exp] = residualencoder.HuffmanMapToMidpointSlice(altResidualsEncoderByExp[exp].Map(), ESCAPE_VALUE, compress.MaxResidual)
 			}
 			fmt.Printf("\tStatistics of why each map was truncated before being sent for Huffman encoding:\n")
 			fmt.Printf("\t%s: %d occurances\n", REASON_STRING_0, reasonHist[0])

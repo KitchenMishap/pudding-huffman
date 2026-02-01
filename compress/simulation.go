@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"github.com/KitchenMishap/pudding-huffman/kmeans"
+	"github.com/KitchenMishap/pudding-huffman/residualencoder"
 	"github.com/KitchenMishap/pudding-huffman/verify"
 	"github.com/KitchenMishap/pudding-shed/chainreadinterface"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 	"math"
 	"math/bits"
 	"math/rand"
@@ -199,7 +202,8 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	blocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	microEpochToPhasePeaks []kmeans.MantissaArray,
-	max_base_10_exp int) (*[20][ResidualSliceWidth]int64, // First result: outer array index is the exponent (number of decimal zeros). Inner array is freq for each possible residual
+	max_base_10_exp int, escapeValue int64) ([]residualencoder.Encoder, // First result: by exp
+	[]residualencoder.Encoder, // Second result: by exp
 	*[MaxCombined]int64) { // Second result: frequencies of combined peak/harmonic index
 
 	// TotalResidualFreqs is a flat array of all possible residuals
@@ -349,7 +353,35 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	jobElapsed = time.Since(tJob)
 	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
-	return &TotalResidualFreqsByExp, &TotalCombinedFreq
+	tJob = time.Now()
+	sJob = "Stage 1.6, Build the Huffman trees for a variance at each exp (SERIAL)"
+	fmt.Printf("%s\n", sJob)
+
+	if max_base_10_exp != 20 {
+		panic("You changed a constant!")
+	}
+	residualEncoders := make([]residualencoder.Encoder, 20)
+	altResidualEncoders := make([]residualencoder.Encoder, 20)
+	for exp := 0; exp < 20; exp++ {
+		residualEncoders[exp] = &residualencoder.Huffman{}
+		residualEncoders[exp].InitSlice(TotalResidualFreqsByExp[exp][:], MaxResidual, escapeValue, MaxResidual)
+		altResidualEncoders[exp] = &residualencoder.VarianceHuffman{}
+		altResidualEncoders[exp].InitSlice(TotalResidualFreqsByExp[exp][:], MaxResidual, escapeValue, MaxResidual)
+		variance := altResidualEncoders[exp].Variance()
+
+		sigma := math.Sqrt(float64(variance))
+		coverage70 := 1.036 * sigma
+		// Calculate a representative peak for the printout
+		peakExample := math.Pow(10, float64(exp)) * 5
+		p := message.NewPrinter(language.English) // For commas between thousands
+		p.Printf("Exp %2d: [Peak ~%12.0f] 70%% of residuals are within ±%.0f sats (Sigma: %.2f)\n",
+			exp, peakExample, coverage70, sigma)
+	}
+
+	jobElapsed = time.Since(tJob)
+	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
+
+	return residualEncoders, altResidualEncoders, &TotalCombinedFreq
 }
 
 func bucketCount(beans int64, beansPerBucket int64) int64 {
