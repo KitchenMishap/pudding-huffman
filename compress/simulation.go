@@ -653,38 +653,23 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 						outputsAndFeesQuotes[loser] = "Rest: You can work out this amount from the rest of the transaction"
 
 						transactionBitcount := 0
-						mutex.Lock()
 						for c, code := range outputsAndFeesCodes {
 							transactionBitcount += code.Length
 							if outputsAndFeesEncodingChoice[c] == literalSelector {
 								local.stats.LiteralHits++
 								local.stats.LiteralBits += uint64(code.Length)
-								if doPodium {
-									podiumForLiterals.Submit(code, outputsAndFeesQuotes[c])
-									podiumForGL.Submit(code, outputsAndFeesQuotes[c])
-								}
 							}
 							if outputsAndFeesEncodingChoice[c] == celebSelector {
 								local.stats.CelebrityHits++
 								local.stats.CelebrityBits += uint64(code.Length)
-								if doPodium {
-									podiumForCelebrities.Submit(code, outputsAndFeesQuotes[c])
-								}
 							}
 							if outputsAndFeesEncodingChoice[c] == ghostSelector {
 								local.stats.GhostHits++
 								local.stats.GhostBits += uint64(code.Length)
-								if doPodium {
-									podiumForGhosts.Submit(code, outputsAndFeesQuotes[c])
-									podiumForGL.Submit(code, outputsAndFeesQuotes[c])
-								}
 							}
 							if outputsAndFeesEncodingChoice[c] == restSelector {
 								local.stats.RestHits++
 								local.stats.RestBits += uint64(code.Length)
-								if doPodium {
-									podiumForRests.Submit(code, outputsAndFeesQuotes[c])
-								}
 								// For this transaction (using the transaction's height as an index), we
 								// make a note of which transaction output (c) is to be excluded from the next
 								// round of ghost k-means peak estimation. We have room to store this as a byte.
@@ -701,10 +686,29 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								}
 							}
 						}
-						mutex.Unlock()
 
 						local.stats.TotalBits += uint64(transactionBitcount)
 
+						if doPodium {
+							mutex.Lock()
+							for c, code := range outputsAndFeesCodes {
+								if outputsAndFeesEncodingChoice[c] == literalSelector {
+									podiumForLiterals.Submit(code, outputsAndFeesQuotes[c])
+									podiumForGL.Submit(code, outputsAndFeesQuotes[c])
+								}
+								if outputsAndFeesEncodingChoice[c] == celebSelector {
+									podiumForCelebrities.Submit(code, outputsAndFeesQuotes[c])
+								}
+								if outputsAndFeesEncodingChoice[c] == ghostSelector {
+									podiumForGhosts.Submit(code, outputsAndFeesQuotes[c])
+									podiumForGL.Submit(code, outputsAndFeesQuotes[c])
+								}
+								if outputsAndFeesEncodingChoice[c] == restSelector {
+									podiumForRests.Submit(code, outputsAndFeesQuotes[c])
+								}
+							}
+							mutex.Unlock()
+						}
 					} // For transactions
 				} // for blockIdx
 				// Report progress on completion

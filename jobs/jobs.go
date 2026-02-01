@@ -138,7 +138,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	}
 
 	blocks := latestBlock.Height() + 1
-	blocks = 400_000
+	//blocks = 400_000
 
 	elapsed = time.Since(startTime)
 	sJob := "Creating the celebrity histograms per epoch (PARALLEL by epoch)"
