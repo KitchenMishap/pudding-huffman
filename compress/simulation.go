@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"github.com/KitchenMishap/pudding-huffman/kmeans"
+	"github.com/KitchenMishap/pudding-huffman/verify"
 	"github.com/KitchenMishap/pudding-shed/chainreadinterface"
 	"golang.org/x/sync/errgroup"
 	"math"
@@ -709,6 +710,41 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							}
 							mutex.Unlock()
 						}
+						// Inside your transaction loop...
+						if blockIdx == 800000 && t == 0 { // Verification Test for First Tx of Block 800k
+							fmt.Println("\n=== PUDDING TASTE TEST (Block 800,000) ===")
+
+							stream := &verify.BitStream{}
+							//var originalAmounts []int64
+
+							// 1. COMPRESS
+							for _, code := range outputsAndFeesCodes {
+								stream.WriteCode(code)
+								// Store original amount to compare later
+								// Note: You need the amount associated with this code
+								// For 'Rest' codes, this verification is harder because we need the context.
+								// For now, let's verify we can recover the SYMBOL (e.g. "Ghost", "PeakIdx", "Residual")
+								// To verify the AMOUNT, you essentially need to write the Decoder logic here.
+							}
+							stream.Flush()
+
+							fmt.Printf("Original Bits Calculated: %d\n", transactionBitcount)
+							fmt.Printf("Actual Stream Bytes: %d\n", stream.Buffer.Len())
+
+							// 2. DECOMPRESS
+							stream.StartRead()
+
+							// We need to simulate the Decoder's state machine:
+							// 1. Read Selector (2 bits) -> Decides which Tree to use next
+							// 2. Read Value from that Tree
+
+							// This is the hard part: You need to expose the ROOTS of your Huffman trees to the verification function.
+							// Ideally, pass the `podiumForGhosts`, etc., or the actual trees.
+
+							fmt.Println("Stream successfully written! (Decoder logic pending)")
+							fmt.Println("==========================================\n")
+						}
+
 					} // For transactions
 				} // for blockIdx
 				// Report progress on completion

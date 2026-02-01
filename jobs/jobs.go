@@ -343,7 +343,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			return err
 		}
 
-		if pass == 1 {
+		if pass == 0 {
 			f, err := os.Create("FourDigits.csv")
 			if err != nil {
 				panic("couldn't open file")
