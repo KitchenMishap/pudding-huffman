@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/bits"
 	"math/rand"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
@@ -468,6 +469,18 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 		celebsMutexes[i] = sync.Mutex{}
 	}
 
+	mu := sync.Mutex{}
+	ghostsDigitsFile, err := os.Create("GhostPriceDigits.csv")
+	if err != nil {
+		panic("Could not open GhostPriceDigits.csv")
+	}
+
+	bigCode := huffman.BitCode{0xFFFFFFFFFFFFFFFF, 64}
+	celebSelector := huffman.BitCode{0b00, 2}
+	ghostSelector := huffman.BitCode{0b01, 2}
+	literalSelector := huffman.BitCode{0b10, 2}
+	restSelector := huffman.BitCode{0b11, 2}
+
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
 		g.Go(func() error { // Use the errgroup instead of "go func() {"
@@ -483,6 +496,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 					return ctx.Err()
 				default:
 				}
+
+				localPriceTally := [1001]byte{}
+				localPriceReport := make([]string, 0, 1000)
 
 				for blockIdx := blockThousand; blockIdx < blockThousand+blocksInBatch && blockIdx < blocks; blockIdx++ {
 					epochID := blockIdx / blocksPerEpoch
@@ -533,15 +549,10 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 						// We have all the outputs and the fees for the transaction
 						// Work out the bit cost for every one of these (BEFORE we choose which is most bit-expensive)
-						bigCode := huffman.BitCode{0xFFFFFFFFFFFFFFFF, 64}
-						celebSelector := huffman.BitCode{0b00, 2}
-						ghostSelector := huffman.BitCode{0b01, 2}
-						literalSelector := huffman.BitCode{0b10, 2}
-						restSelector := huffman.BitCode{0b11, 2}
-
 						outputsAndFeesCodes := make([]huffman.BitCode, len(outputsAndFeesAmounts))
 						outputsAndFeesEncodingChoice := make([]huffman.BitCode, len(outputsAndFeesAmounts))
 						outputsAndFeesQuotes := make([]string, len(outputsAndFeesAmounts))
+						satsLog10 := kmeans.KFloat(0)
 						for c, amount := range outputsAndFeesAmounts {
 
 							// Stage 1: Celebrity cost
@@ -552,8 +563,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							celebBitString := ""
 							if aCode, ok := epochToCelebCodes[epochID][amount]; ok {
 								celebCode = huffman.JoinBitCodes(celebSelector, aCode)
-								celebBitString = celebSelector.String() + "_" + aCode.String()
 								if doPodium {
+									celebBitString = celebSelector.String() + "_" + aCode.String()
 									if amount >= 100000 {
 										celebQuote = "Celeb BTC amount: " + strconv.FormatFloat(float64(amount)/100000000, 'f', 8, 64) + " BTC " + celebBitString
 									} else {
@@ -588,10 +599,11 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 									if peakIdx < CSV_COLUMNS {
 										local.peakStrengths[epochID][peakIdx]++ // Yes this IS supposed to be here. It's for oracle price prediction
 									}
+									satsLog10 = microEpochToPhasePeaks[microEpochID].Get(peakIdx)
 									if eCode, ok := expCodes[int64(e)]; ok {
 										ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
-										ghostBitString = ghostSelector.String() + "_" + combinedCode.String() + "_" + eCode.String() + "_" + rCode.String()
 										if doPodium {
+											ghostBitString = ghostSelector.String() + "_" + combinedCode.String() + "_" + eCode.String() + "_" + rCode.String()
 											// 4 digit peak value in sats
 											digitsSats := int64(math.Round(microEpochToPhasePeaks[microEpochID].Get10toPow(peakIdx, 3)))
 											ghostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
@@ -630,8 +642,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								bitsCode = huffman.BitCode{0, 0}
 							}
 							literalCode = huffman.JoinBitCodes(literalSelector, magCode, bitsCode)
-							literalBitString = literalSelector.String() + "_" + magCode.String() + "_" + bitsCode.String()
 							if doPodium {
+								literalBitString = literalSelector.String() + "_" + magCode.String() + "_" + bitsCode.String()
 								literalQuote = "Literal: " + strconv.FormatInt(amount, 10) + " sats " + literalBitString
 							}
 							// Choose whichever choice of encoding is cheapest (ignoring restSelector for now)
@@ -680,6 +692,17 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							if outputsAndFeesEncodingChoice[c] == ghostSelector {
 								local.stats.GhostHits++
 								local.stats.GhostBits += uint64(code.Length)
+
+								// Worth outputting to file!
+								year100 := int(100 * (float64(blockIdx) / 144 / 365.25))
+								fiatLog10 := 1.0 - satsLog10
+								fiatDigits := int(math.Pow(10, float64(fiatLog10)) * 100)
+								ghostPrice := fiatDigits
+								price := ghostPrice
+								localPriceTally[price]++
+								if localPriceTally[price] == 1 {
+									localPriceReport = append(localPriceReport, fmt.Sprintf("%.2f, %d", 2009+float64(year100)/100, price))
+								}
 							}
 							if outputsAndFeesEncodingChoice[c] == restSelector {
 								local.stats.RestHits++
@@ -760,6 +783,13 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 					} // For transactions
 				} // for blockIdx
+
+				mu.Lock()
+				for _, s := range localPriceReport {
+					fmt.Fprintln(ghostsDigitsFile, s)
+				}
+				mu.Unlock()
+
 				// Report progress on completion
 				done := atomic.AddInt64(&completed, blocksInBatch)
 				if done%10000 == 0 || done == blocks {
@@ -785,6 +815,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	wg.Wait()
 	close(resultsChan)
 	fmt.Printf("\nDone that now\n")
+
+	ghostsDigitsFile.Close()
 
 	// Final Reduction
 	globalStats := CompressionStats{}
