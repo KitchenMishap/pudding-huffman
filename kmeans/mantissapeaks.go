@@ -571,7 +571,7 @@ func bucketCount(beans int64, beansPerBucket int64) int64 {
 	return (beans + beansPerBucket - 1) / beansPerBucket
 }
 
-func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator, blocks int64, blocksPerMicroEpoch int64,
+func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator, interestedBlock int64, interestedBlocks int64, blocksPerMicroEpoch int64,
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand,
 	transToExcludedOutput *[2000000000]byte,
 	epochToExcludedCelebs []map[int64]bool, spokesMode string) ([]MantissaArray, error) {
@@ -580,12 +580,15 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	fmt.Printf("\t%s\n", sJob)
 	tJob := time.Now()
 
-	epochs := bucketCount(blocks, blocksPerEpoch)
-	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
-	microEpochToPhasePeaks := make([]MantissaArray, microEpochs)
+	interestedEpoch := interestedBlock / blocksPerEpoch
+	interestedEpochs := bucketCount(interestedBlocks, blocksPerEpoch)
+	interestedMicroEpochs := bucketCount(interestedBlocks, blocksPerMicroEpoch)
+	microEpochToPhasePeaks := make([]MantissaArray, interestedMicroEpochs)
 	microEpochsPerEpoch := blocksPerEpoch / blocksPerMicroEpoch
 
-	microEpochsToTxos := make([]int64, microEpochs)
+	interestedMicroEpoch := interestedBlock / blocksPerMicroEpoch
+
+	microEpochsToTxos := make([]int64, interestedMicroEpochs)
 	transactionsInChain := int64(0)
 	blocksInChain := int64(0)
 
@@ -603,7 +606,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	g, ctx := errgroup.WithContext(context.Background())
 	sem := make(chan struct{}, numWorkers)
 
-	for i := int64(0); i < epochs; i++ {
+	for i := interestedEpoch; i < interestedEpoch+interestedEpochs; i++ {
 		epochID := i // Capture for closure
 		g.Go(func() error {
 			sem <- struct{}{}
@@ -629,25 +632,25 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 			if epochToExcludedCelebs == nil {
 				celebsToExclude = nil
 			} else {
-				celebsToExclude = epochToExcludedCelebs[epochID]
+				celebsToExclude = epochToExcludedCelebs[epochID-interestedEpoch]
 			}
 
 			// Go through the microEpochs in this epoch
 			firstMe := epochID * microEpochsPerEpoch
 			lastMe := (epochID + 1) * microEpochsPerEpoch // Usually
-			if lastMe > microEpochs {
-				lastMe = microEpochs // Finally (last, possibly partial, epoch)
+			if lastMe > interestedMicroEpoch+interestedMicroEpochs {
+				lastMe = interestedMicroEpoch + interestedMicroEpochs // Finally (last, possibly partial, epoch)
 			}
 			for me := firstMe; me < lastMe; me++ {
 				txoCount := 0
 				buffer = buffer[:0] // Reset buffer but keep allocated memory
 				firstBlock := epochID*blocksPerEpoch + (me-firstMe)*blocksPerMicroEpoch
-				if firstBlock >= blocks {
+				if firstBlock >= interestedBlock+interestedBlocks {
 					break
 				}
 				lastBlock := firstBlock + blocksPerMicroEpoch
-				if lastBlock > blocks {
-					lastBlock = blocks
+				if lastBlock > interestedBlock+interestedBlocks {
+					lastBlock = interestedBlock + interestedBlocks
 				}
 
 				// To emulate the old code, we need to know the txoIndex of the first txo of the first trans
@@ -740,7 +743,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 								// The amount is specified as an excluded celebrity for this epoch
 							} else {
 								oldCodeTxoIndex := firstTxoOfTrans + int64(txo)
-								if _, ok := celebCodesPerEpoch[epochID][amount]; !ok {
+								if _, ok := celebCodesPerEpoch[epochID-interestedEpoch][amount]; !ok {
 									// Only if NOT a celeb
 									if transToExcludedOutput == nil {
 										// First pass, thin it down
@@ -766,18 +769,18 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 						}
 					} // for transactions
 				} // for blocks
-				atomic.AddInt64(&microEpochsToTxos[me], int64(txoCount))
+				atomic.AddInt64(&microEpochsToTxos[me-interestedMicroEpoch], int64(txoCount))
 				if len(buffer) < MIN_AMOUNT_COUNT_FOR_ANALYSIS {
-					microEpochToPhasePeaks[me] = nil
+					microEpochToPhasePeaks[me-interestedMicroEpoch] = nil
 				} else {
 					// This is the heavy lifting
-					microEpochToPhasePeaks[me] = FindEpochPeaksMain(buffer, localRand, spokesMode)
+					microEpochToPhasePeaks[me-interestedMicroEpoch] = FindEpochPeaksMain(buffer, localRand, spokesMode)
 				}
 			} // for micro epochs
 
 			// Report progress on completion of epoch
 			done := atomic.AddInt64(&completed, 1)
-			fmt.Printf("\r\tProgress %.1f%%    ", float64(100*done)/float64(epochs))
+			fmt.Printf("\r\tProgress %.1f%%    ", float64(100*done)/float64(interestedEpochs))
 
 			return nil
 		})
@@ -791,8 +794,8 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 
 	txosInChain := int64(0)
-	for i := int64(0); i < microEpochs; i++ {
-		txosInChain += microEpochsToTxos[i]
+	for i := interestedMicroEpoch; i < interestedMicroEpoch+interestedMicroEpochs; i++ {
+		txosInChain += microEpochsToTxos[i-interestedMicroEpoch]
 	}
 	fmt.Printf("\tConsidered %d blocks (should be 888,888\n", blocksInChain)
 	fmt.Printf("\tTODO! Considered %d transactions (should be 1169006472)\n", transactionsInChain)

@@ -37,7 +37,8 @@ type CompressionStats struct {
 
 func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	handles chainreadinterface.IHandleCreator,
-	blocks int64,
+	interestedBlock int64,
+	interestedBlocks int64,
 	blocksPerEpoch int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	max_base_10_exp int) (CompressionStats, []int64, []int64, error) {
@@ -45,6 +46,8 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	sJob := "Stage 1: ParallelAmountStatistics() (PARALLEL by block)"
 	fmt.Printf("\t%s\n", sJob)
 	tJob := time.Now()
+
+	interestedEpoch := interestedBlock / blocksPerEpoch
 
 	blocksDone := uint64(0) // atomic int
 
@@ -116,7 +119,7 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 						amount := sats
 
 						// Stage 1: Celebrity
-						if _, ok := epochToCelebCodes[epochID][amount]; ok {
+						if _, ok := epochToCelebCodes[epochID-interestedEpoch][amount]; ok {
 							//local.stats.CelebrityHits++	No statistics in this run!
 							continue
 						}
@@ -133,8 +136,8 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 					}
 				} // For transaction
 				done := atomic.AddUint64(&blocksDone, 1)
-				if done%100000 == 0 || done == uint64(blocks) {
-					fmt.Printf("\r\tProgress: %.1f   ", float64(done*100)/float64(blocks))
+				if done%100000 == 0 || done == uint64(interestedBlocks) {
+					fmt.Printf("\r\tProgress: %.1f   ", float64(done*100)/float64(interestedBlocks))
 				}
 			} // For block
 			resultsChan <- local
@@ -145,7 +148,7 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 	// Feed the Channel (The Producer). This is now errgroup context-aware
 	go func() {
 		defer close(jobsChan)
-		for b := int64(0); b < blocks; b++ {
+		for b := interestedBlock; b < interestedBlock+interestedBlocks; b++ {
 			select { // Note: NOT a switch statement!
 			case jobsChan <- b: // This happens if a worker is free to be fed an epoch ID
 			case <-ctx.Done(): // This happens if a worker returned an err
@@ -200,11 +203,15 @@ const MaxCombined = 5000
 func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator,
 	blocksPerEpoch int64,
 	blocksPerMicroEpoch int64,
-	blocks int64,
+	interestedBlock int64,
+	interestedBlocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	microEpochToPhasePeaks []kmeans.MantissaArray,
 	max_base_10_exp int, escapeValue int64) (*[20][10]residualencoder.Encoder, // First result: by exp
 	*[MaxCombined]int64) { // Second result: frequencies of combined peak/harmonic index
+
+	interestedEpoch := interestedBlock / blocksPerEpoch
+	interestedMicroEpoch := interestedBlock / blocksPerMicroEpoch
 
 	// TotalResidualFreqs is a flat array of all possible residuals
 	if max_base_10_exp != 20 {
@@ -284,11 +291,11 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 						amount := sats
 
 						// Stage 1: Celebrity
-						if _, ok := epochToCelebCodes[epochID][amount]; ok {
+						if _, ok := epochToCelebCodes[epochID-interestedEpoch][amount]; ok {
 							continue
 						}
 
-						if microEpochToPhasePeaks[microEpochID] == nil || microEpochToPhasePeaks[microEpochID].Len() == 0 {
+						if microEpochToPhasePeaks[microEpochID-interestedMicroEpoch] == nil || microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Len() == 0 {
 							// This is probably an "early" week (epoch) where there weren't enough amount peaks to
 							// do the k-means analysis on (other than common "celebrity" amounts which bypass this already)
 							continue
@@ -300,7 +307,7 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 							continue
 						}
 
-						e, m, peak, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
+						e, m, peak, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID-interestedMicroEpoch])
 						combined := peak*3 + harmonic
 						atomic.AddInt64(&(TotalCombinedFreq[combined]), 1)
 
@@ -313,7 +320,7 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 					}
 				} // for tranaction
 				done := atomic.AddInt64(&blocksDone, 1)
-				fmt.Printf("\r\tProgress %.1f   ", float64(done*100)/float64(blocks))
+				fmt.Printf("\r\tProgress %.1f   ", float64(done*100)/float64(interestedBlocks))
 			} // for block
 			resultsChan <- 123
 			return nil
@@ -323,7 +330,7 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 	// Feed the workers
 	go func() {
 		defer close(jobsChan)
-		for b := int64(0); b < blocks; b++ {
+		for b := interestedBlock; b < interestedBlock+interestedBlocks; b++ {
 			select { // Note: NOT a switch statement!
 			case jobsChan <- b: // This happens if a worker is free to be fed an epoch ID
 			case <-ctx.Done(): // This happens if a worker returned an err
@@ -416,7 +423,8 @@ const CSV_COLUMNS = 3
 func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator,
 	blocksPerEpoch int64,
 	blocksPerMicroEpoch int64,
-	blocks int64,
+	interestedBlock int64,
+	interestedBlocks int64,
 	epochToCelebCodes []map[int64]huffman.BitCode,
 	expCodes map[int64]huffman.BitCode,
 	residualEncoderByExpM *[20][10]residualencoder.Encoder,
@@ -429,6 +437,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 	fmt.Printf("\t(PARALLEL, by block)\n")
 
+	interestedEpoch := interestedBlock / blocksPerEpoch
+	interestedMicroEpoch := interestedBlock / blocksPerMicroEpoch
+
 	const blocksInBatch = 1000
 
 	mutex := &sync.Mutex{}
@@ -440,8 +451,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 	completed := int64(0) // Atomic int
 
-	microEpochs := bucketCount(blocks, blocksPerMicroEpoch)
-	epochs := bucketCount(blocks, blocksPerEpoch)
+	interestedMicroEpochs := bucketCount(interestedBlocks, blocksPerMicroEpoch)
+	interestedEpochs := bucketCount(interestedBlocks, blocksPerEpoch)
 
 	workersDivider := 1
 	numWorkers := runtime.NumCPU() / workersDivider
@@ -462,9 +473,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	g, ctx := errgroup.WithContext(context.Background())
 
 	transToExcludedOutput := [2000000000]byte{}
-	celebsToExcludeOutput := make([]map[int64]bool, epochs)
-	celebsMutexes := make([]sync.Mutex, epochs)
-	for i := int64(0); i < epochs; i++ {
+	celebsToExcludeOutput := make([]map[int64]bool, interestedEpochs)
+	celebsMutexes := make([]sync.Mutex, interestedEpochs)
+	for i := int64(0); i < interestedEpochs; i++ {
 		celebsToExcludeOutput[i] = make(map[int64]bool)
 		celebsMutexes[i] = sync.Mutex{}
 	}
@@ -486,7 +497,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 		g.Go(func() error { // Use the errgroup instead of "go func() {"
 			defer wg.Done()
 			local := workerResult{
-				peakStrengths: make([][CSV_COLUMNS]int64, microEpochs),
+				peakStrengths: make([][CSV_COLUMNS]int64, interestedMicroEpochs),
 			}
 
 			for blockThousand := range blocksChan {
@@ -500,10 +511,10 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 				localPriceTally := [1001]byte{}
 				localPriceReport := make([]string, 0, 1000)
 
-				for blockIdx := blockThousand; blockIdx < blockThousand+blocksInBatch && blockIdx < blocks; blockIdx++ {
+				for blockIdx := blockThousand; blockIdx < blockThousand+blocksInBatch && blockIdx < interestedBlock+interestedBlocks; blockIdx++ {
 					epochID := blockIdx / blocksPerEpoch
 					microEpochID := blockIdx / blocksPerMicroEpoch
-					doPodium := (epochID == epochs-1)
+					doPodium := (epochID == interestedEpoch+interestedEpochs-1)
 
 					blockHandle, err := handles.BlockHandleByHeight(int64(blockIdx))
 					if err != nil {
@@ -561,7 +572,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							celebCode := bigCode
 							celebQuote := "?"
 							celebBitString := ""
-							if aCode, ok := epochToCelebCodes[epochID][amount]; ok {
+							if aCode, ok := epochToCelebCodes[epochID-interestedEpoch][amount]; ok {
 								celebCode = huffman.JoinBitCodes(celebSelector, aCode)
 								if doPodium {
 									celebBitString = celebSelector.String() + "_" + aCode.String()
@@ -573,9 +584,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								}
 								// amount is a winning (cheap) celeb for this epoch
 								// exclude amount from the next k-means peak detection run
-								celebsMutexes[epochID].Lock()
-								celebsToExcludeOutput[epochID][amount] = true
-								celebsMutexes[epochID].Unlock()
+								celebsMutexes[epochID-interestedEpoch].Lock()
+								celebsToExcludeOutput[epochID-interestedEpoch][amount] = true
+								celebsMutexes[epochID-interestedEpoch].Unlock()
 							}
 
 							// Stage 2: Ghost cost (maxint means ghost status not available)
@@ -585,8 +596,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							ghostBitString := ""
 							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
 							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
-							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && microEpochToPhasePeaks[microEpochID].Len() > 0 {
-								e, m, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID])
+							if amount > 0 && microEpochToPhasePeaks[microEpochID-interestedMicroEpoch] != nil && microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Len() > 0 {
+								e, m, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID-interestedMicroEpoch])
 								{
 									rCode := residualEncoderByExpM[e][m].Encode(r)
 
@@ -599,13 +610,13 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 									if peakIdx < CSV_COLUMNS {
 										local.peakStrengths[epochID][peakIdx]++ // Yes this IS supposed to be here. It's for oracle price prediction
 									}
-									satsLog10 = microEpochToPhasePeaks[microEpochID].Get(peakIdx)
+									satsLog10 = microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Get(peakIdx)
 									if eCode, ok := expCodes[int64(e)]; ok {
 										ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
 										if doPodium {
 											ghostBitString = ghostSelector.String() + "_" + combinedCode.String() + "_" + eCode.String() + "_" + rCode.String()
 											// 4 digit peak value in sats
-											digitsSats := int64(math.Round(microEpochToPhasePeaks[microEpochID].Get10toPow(peakIdx, 3)))
+											digitsSats := int64(math.Round(microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Get10toPow(peakIdx, 3)))
 											ghostQuote = strconv.FormatInt(digitsSats, 10) + "sats (being harmonic "
 											ghostQuote += strconv.FormatInt(int64(harmonic), 10) + " of peak "
 											ghostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
@@ -792,8 +803,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 				// Report progress on completion
 				done := atomic.AddInt64(&completed, blocksInBatch)
-				if done%10000 == 0 || done == blocks {
-					fmt.Printf("\r\tProgress: %.1f%%    ", float64(100*done)/float64(blocks))
+				if done%10000 == 0 || done == interestedBlocks {
+					fmt.Printf("\r\tProgress: %.1f%%    ", float64(100*done)/float64(interestedBlocks))
 				}
 			}
 			resultsChan <- local
@@ -803,7 +814,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	}
 	go func() {
 		defer close(blocksChan)
-		for b := int64(0); b < blocks; b += blocksInBatch {
+		for b := interestedBlock; b < interestedBlock+interestedBlocks; b += blocksInBatch {
 			select { // Note: NOT a switch statement!
 			case blocksChan <- b: // This happens if a worker is free to be fed an epoch ID
 			case <-ctx.Done(): // This happens if a worker returned an err
@@ -820,7 +831,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 	// Final Reduction
 	globalStats := CompressionStats{}
-	globalStrengths := make([][CSV_COLUMNS]int64, microEpochs)
+	globalStrengths := make([][CSV_COLUMNS]int64, interestedMicroEpochs)
 	for res := range resultsChan {
 		globalStats.TotalBits += res.stats.TotalBits
 		globalStats.CelebrityHits += res.stats.CelebrityHits
@@ -832,9 +843,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 		globalStats.RestHits += res.stats.RestHits
 		globalStats.RestBits += res.stats.RestBits
 
-		for me := int64(0); me < microEpochs; me++ {
+		for me := interestedMicroEpoch; me < interestedMicroEpochs; me++ {
 			for p := 0; p < CSV_COLUMNS; p++ {
-				globalStrengths[me][p] += res.peakStrengths[me][p]
+				globalStrengths[me-interestedMicroEpoch][p] += res.peakStrengths[me-interestedMicroEpoch][p]
 			}
 		}
 	}
