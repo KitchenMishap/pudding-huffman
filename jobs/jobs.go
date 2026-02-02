@@ -348,7 +348,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 
 		microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, interestedBlock, interestedBlocks, blocksPerMicroEpoch,
 			epochToCelebCodes, blocksPerEpoch, deterministic, excludeTransOutputs, excludeCelebs,
-			sSpokes)
+			sSpokes, nil)
 		if err != nil {
 			return err
 		}
@@ -388,8 +388,15 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 		if pass == 0 {
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "Build residuals map (PARALLEL per exp) ")
-
 			residualsEncoderByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, interestedBlock, interestedBlocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP, ESCAPE_VALUE)
+
+			fmt.Printf("SECOND round of KMeans...")
+			microEpochToPhasePeaks, err = kmeans.ParallelKMeans(chain, handles, interestedBlock, interestedBlocks, blocksPerMicroEpoch,
+				epochToCelebCodes, blocksPerEpoch, deterministic, excludeTransOutputs, excludeCelebs,
+				sSpokes, residualsEncoderByExp)
+			if err != nil {
+				return err
+			}
 
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")

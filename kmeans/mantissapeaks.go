@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
+	"github.com/KitchenMishap/pudding-huffman/residualencoder"
 	"github.com/KitchenMishap/pudding-shed/chainreadinterface"
 	"golang.org/x/sync/errgroup"
 	"math"
@@ -564,6 +565,20 @@ func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, m int, 
 	return
 }
 
+func ExpM(amount int64) (exp int, m int) {
+	if amount <= 0 {
+		return 0, 0
+	}
+
+	// 1. Get our 16-bit "Clock Position" and the integer Exponent
+	// This replaces Log10, Modf, and the < 0 check
+	dialPos, e := FastLog10FractionalAndExp(amount)
+	logCentroid := KFloat(dialPos) / 65536.0
+	exp = e
+	m = int(logCentroid * 10) // A number for grouping amounts into 10 "log mantissa classe"
+	return exp, m
+}
+
 const MIN_AMOUNT_COUNT_FOR_ANALYSIS = 100
 
 // "beans/beansperbucket+1" usually works, but you get black swans when the division is exact
@@ -571,10 +586,12 @@ func bucketCount(beans int64, beansPerBucket int64) int64 {
 	return (beans + beansPerBucket - 1) / beansPerBucket
 }
 
-func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator, interestedBlock int64, interestedBlocks int64, blocksPerMicroEpoch int64,
+func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator,
+	interestedBlock int64, interestedBlocks int64, blocksPerMicroEpoch int64,
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand,
 	transToExcludedOutput *[2000000000]byte,
-	epochToExcludedCelebs []map[int64]bool, spokesMode string) ([]MantissaArray, error) {
+	epochToExcludedCelebs []map[int64]bool, spokesMode string,
+	optionalResidualEncoders *[20][10]residualencoder.Encoder) ([]MantissaArray, error) {
 
 	sJob := "Peak detection: PARALLEL by micro-epoch"
 	fmt.Printf("\t%s\n", sJob)
@@ -737,6 +754,13 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 							}
 							if exclusionListExists && found {
 								excluded = true
+							}
+
+							if optionalResidualEncoders != nil {
+								exp, m := ExpM(sats)
+								if optionalResidualEncoders[exp][m] == nil {
+									excluded = true
+								}
 							}
 
 							if excluded {
