@@ -381,7 +381,12 @@ func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockCha
 				// Build tree [e][localM] here
 				residualEncoders[e][localM] = &residualencoder.VarianceHuffman{}
 				residualEncoders[e][localM].InitSlice(TotalResidualFreqsByExp[e][localM][:], MaxResidual, escapeValue, MaxResidual)
-				if localM == mFor5 {
+				sigma := math.Sqrt(float64(residualEncoders[e][localM].Variance()))
+				peakExample := math.Pow(10, float64(float64(e)+float64(m)/10))
+				sigmaOverPeakPercent := 100 * sigma / peakExample
+				if sigmaOverPeakPercent > 10 {
+					residualEncoders[e][localM] = nil
+				} else if localM == mFor5 {
 					variance := residualEncoders[e][localM].Variance()
 					sigma := math.Sqrt(float64(variance))
 					coverage70 := 1.036 * sigma
@@ -598,7 +603,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
 							if amount > 0 && microEpochToPhasePeaks[microEpochID-interestedMicroEpoch] != nil && microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Len() > 0 {
 								e, m, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID-interestedMicroEpoch])
-								{
+								if residualEncoderByExpM[e][m] == nil {
+									// No worthwhile encoder (many were deleted if their peak width was a large proportion compared to their peak)
+								} else {
 									rCode := residualEncoderByExpM[e][m].Encode(r)
 
 									// Now we have a huffman code for the combination of peak index and harmonic index.
