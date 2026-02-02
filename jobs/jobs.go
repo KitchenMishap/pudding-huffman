@@ -137,9 +137,9 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	}
 
 	blocks := latestBlock.Height() + 1
-	//blocks = 300_000
+	blocks = 300_000
 	fmt.Printf("** In this run, we are looking at %d blocks **\n", blocks)
-	sSpokes := "9 spokes"
+	sSpokes := "1-2-5 spokes"
 	fmt.Printf("** In this run, we are using %s **\n", sSpokes)
 	//const blocksPerEpoch = 144 * 7 // Roughly a week
 	//const blocksPerMicroEpoch = 6  // Roughly an hour
@@ -391,7 +391,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** More Huffman stuff **==")
 
 			fmt.Printf("Huffman tree for combined peak and harmonic selection\n")
-			huffCombinedRoot := huffman.BuildHuffmanTreeFromSlice(combinedFreq[:], compress.MaxResidual)
+			huffCombinedRoot := huffman.BuildHuffmanTreeFromSlice(combinedFreq[:], 0)
 			combinedCodes := make(map[int64]huffman.BitCode)
 			huffman.GenerateBitCodes(huffCombinedRoot, 0, 0, combinedCodes)
 

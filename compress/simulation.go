@@ -194,7 +194,7 @@ func ParallelAmountStatistics(chain chainreadinterface.IBlockChain,
 // const MaxResidual = 500_000
 const MaxResidual = 500_000
 const ResidualSliceWidth = (MaxResidual * 2) + 1
-const MaxCombined = 24
+const MaxCombined = 5000
 
 func ParallelGatherResidualFrequenciesByExp10(chain chainreadinterface.IBlockChain, handles chainreadinterface.IHandleCreator,
 	blocksPerEpoch int64,
@@ -549,13 +549,15 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							// The celebrity codes are now PER EPOCH
 							celebCode := bigCode
 							celebQuote := "?"
+							celebBitString := ""
 							if aCode, ok := epochToCelebCodes[epochID][amount]; ok {
 								celebCode = huffman.JoinBitCodes(celebSelector, aCode)
+								celebBitString = celebSelector.String() + "_" + aCode.String()
 								if doPodium {
 									if amount >= 100000 {
-										celebQuote = "Celeb BTC amount: " + strconv.FormatFloat(float64(amount)/100000000, 'f', 8, 64) + " BTC"
+										celebQuote = "Celeb BTC amount: " + strconv.FormatFloat(float64(amount)/100000000, 'f', 8, 64) + " BTC " + celebBitString
 									} else {
-										celebQuote = "Celeb BTC amount: " + strconv.FormatInt(amount, 10) + " sats"
+										celebQuote = "Celeb BTC amount: " + strconv.FormatInt(amount, 10) + " sats " + celebBitString
 									}
 								}
 								// amount is a winning (cheap) celeb for this epoch
@@ -569,6 +571,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							// Intended to capture the "ghosts" of round numbers in fiat-land, when they are converted to satoshis
 							ghostCode := bigCode
 							ghostQuote := "?"
+							ghostBitString := ""
 							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
 							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
 							if amount > 0 && microEpochToPhasePeaks[microEpochID] != nil && microEpochToPhasePeaks[microEpochID].Len() > 0 {
@@ -578,12 +581,16 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 
 									// Now we have a huffman code for the combination of peak index and harmonic index.
 									// This is the initial cost...
-									combinedCode := combinedCodes[int64(3*peakIdx+harmonic)]
+									combinedCode, ok := combinedCodes[int64(3*peakIdx+harmonic)]
+									if !ok {
+										panic("missing combined code")
+									}
 									if peakIdx < CSV_COLUMNS {
 										local.peakStrengths[epochID][peakIdx]++ // Yes this IS supposed to be here. It's for oracle price prediction
 									}
 									if eCode, ok := expCodes[int64(e)]; ok {
 										ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
+										ghostBitString = ghostSelector.String() + "_" + combinedCode.String() + "_" + eCode.String() + "_" + rCode.String()
 										if doPodium {
 											// 4 digit peak value in sats
 											digitsSats := int64(math.Round(microEpochToPhasePeaks[microEpochID].Get10toPow(peakIdx, 3)))
@@ -592,6 +599,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 											ghostQuote += strconv.FormatInt(int64(peakIdx), 10) + ") of the era, x 10e"
 											ghostQuote += strconv.FormatInt(int64(e-3), 10) + " and residual "
 											ghostQuote += strconv.FormatInt(r, 10)
+											ghostQuote += " " + ghostBitString
 										}
 									} else {
 										panic("missing exp code")
@@ -602,6 +610,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							// Stage 3: Magnitude-encoded Literal cost. Always available.
 							literalCode := bigCode
 							literalQuote := "?"
+							literalBitString := ""
 							mag := int64(bits.Len64(uint64(amount))) // Number of bits in the literal (after the binary 0's)
 							// COULD BE 0 BITS! BE AWARE!
 							// One bit saving is clever. Because we can assume "0" is a celebrity (in fact we found that
@@ -621,8 +630,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								bitsCode = huffman.BitCode{0, 0}
 							}
 							literalCode = huffman.JoinBitCodes(literalSelector, magCode, bitsCode)
+							literalBitString = literalSelector.String() + "_" + magCode.String() + "_" + bitsCode.String()
 							if doPodium {
-								literalQuote = "Literal: " + strconv.FormatInt(amount, 10) + " sats"
+								literalQuote = "Literal: " + strconv.FormatInt(amount, 10) + " sats " + literalBitString
 							}
 							// Choose whichever choice of encoding is cheapest (ignoring restSelector for now)
 							choice := literalSelector
@@ -654,7 +664,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 						}
 						outputsAndFeesCodes[loser] = restSelector // Nothing else is needed for this output!
 						outputsAndFeesEncodingChoice[loser] = restSelector
-						outputsAndFeesQuotes[loser] = "Rest: You can work out this amount from the rest of the transaction"
+						outputsAndFeesQuotes[loser] = "Rest: You can work out this amount from the rest of the transaction " + restSelector.String()
 
 						transactionBitcount := 0
 						for c, code := range outputsAndFeesCodes {

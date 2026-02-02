@@ -6,6 +6,8 @@ import (
 	"sort"
 )
 
+const PodiumQualifyingBits = 32
+
 // --- Core Types ---
 
 type Node struct {
@@ -184,7 +186,7 @@ func NewPodium() *Podium {
 }
 
 func (p *Podium) Submit(code BitCode, words string) {
-	if code.Length > 24 || code.Length == 0 {
+	if code.Length > PodiumQualifyingBits || code.Length == 0 {
 		return // Disqualified from the short-code podium
 	}
 

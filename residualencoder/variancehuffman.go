@@ -40,7 +40,15 @@ func (vh *VarianceHuffman) Encode(val int64) huffman.BitCode {
 		if index < 0 || index >= int64(len(vh.codesSlice)) {
 			return huffman.BigCode()
 		}
+		if vh.codesSlice[index].Length == 0 {
+			// No code. Probably an outlier? Return a silly-big code
+			return huffman.BigCode()
+		}
 		return vh.codesSlice[index]
+	}
+	if vh.codes[val].Length == 0 {
+		// No code. Probably an outlier? Return a silly-big code
+		return huffman.BigCode()
 	}
 	return vh.codes[val]
 }

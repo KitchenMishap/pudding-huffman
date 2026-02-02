@@ -216,7 +216,7 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode st
 	}
 
 	if spokeInc > 0 {
-		for i := float64(1.00); i < 10.00; i += 0.1 {
+		for i := float64(1.00); i < 10.00; i += spokeInc {
 			result = append(result, math.Mod(float64(bestPeak)+math.Log10(i), 1))
 		}
 	} else if spokesMode == "1-2-5 spokes" {
@@ -560,6 +560,7 @@ func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, m int, 
 	peakAmount := int64(math.Round(logCentroids.Get10toPow(bestPeak, adjustedExp)))
 	residual = amount - peakAmount
 
+	peak = bestPeak
 	return
 }
 
