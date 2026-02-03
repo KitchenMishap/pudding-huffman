@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"github.com/KitchenMishap/pudding-huffman/blockchain"
+	"github.com/KitchenMishap/pudding-huffman/chainstats"
 	"github.com/KitchenMishap/pudding-huffman/compress"
 	"github.com/KitchenMishap/pudding-huffman/huffman"
 	"github.com/KitchenMishap/pudding-huffman/kmeans"
@@ -125,6 +126,8 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	elapsed := time.Since(startTime)
 	fmt.Printf("The time is now: %s\n", startTime.Format(time.TimeOnly))
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Very start Kinda (after user has typed!) **==")
+
+	_ = chainstats.WholeChainMantissaHistogram(reader.Blockchain(), reader.HandleCreator(), 0, 888888)
 
 	if err != nil {
 		return err
