@@ -127,7 +127,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	fmt.Printf("The time is now: %s\n", startTime.Format(time.TimeOnly))
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Very start Kinda (after user has typed!) **==")
 
-	_ = chainstats.WholeChainMantissaHistogram(reader.Blockchain(), reader.HandleCreator(), 0, 888888)
+	_, _, _ = chainstats.WholeChainMantissaHistogram(reader.Blockchain(), reader.HandleCreator(), 0, 888888)
 
 	if err != nil {
 		return err

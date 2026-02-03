@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -17,10 +18,10 @@ const blocksInBatch = 1000
 
 func WholeChainMantissaHistogram(chain chainreadinterface.IBlockChain,
 	handles chainreadinterface.IHandleCreator,
-	interestedBlock int64, interestedBlocks int64) (xAxis5Digits *[100000]int64) {
+	interestedBlock int64, interestedBlocks int64) (xAxis5Digits *[100000]int64,
+	medians *[100000]int64, bannedMantissas map[int]bool) {
 
 	completedBlocks := int64(0) // Atomic int
-	result100000 := [100000]int64{}
 
 	workersDivider := 1
 	numWorkers := runtime.NumCPU() / workersDivider
@@ -91,7 +92,10 @@ func WholeChainMantissaHistogram(chain chainreadinterface.IBlockChain,
 								frac := log10 - float64(integer)
 								zeroToOne := frac
 								oneToTen := math.Pow(10, zeroToOne)
-								index100000 := int(oneToTen * 10000)
+								index100000 := int(math.Round(oneToTen * 10000))
+								if index100000 >= 100000 {
+									index100000 = 99999 // Just to be sure
+								}
 								local.local100000[index100000]++
 							}
 						} // for txo amounts
@@ -125,18 +129,60 @@ func WholeChainMantissaHistogram(chain chainreadinterface.IBlockChain,
 	fmt.Printf("\nDone that now\n")
 
 	// Final Reduction
+	result100000 := [100000]int64{}
 	for result := range resultsChan {
 		for i100000 := 0; i100000 < 100000; i100000++ {
 			result100000[i100000] += result.local100000[i100000]
 		}
 	}
 	f100000, err := os.Create("100000Hist.csv")
+	fMedian, err := os.Create("100000Median.csv")
 	if err != nil {
 		panic("could not create file 1000Hist.csv")
 	}
+	resultMedian := [100000]int64{}
+	resultBannedMantissas := make(map[int]bool, 1000)
+	bannedSequenceStart := -1
+	bannedSequenceEnd := -1
 	for i100000 := 0; i100000 < 100000; i100000++ {
-		fmt.Fprintf(f100000, "%d, %d\n", i100000, result100000[i100000])
+		hist := result100000[i100000]
+		fmt.Fprintf(f100000, "%d, %d\n", i100000, hist)
+
+		winSize := 5
+		winReach := (winSize - 1) / 2
+		windowLeft := int(math.Max(0, float64(i100000-winReach)))
+		windowRight := int(math.Min(99999, float64(i100000+winReach)))
+		srt := make([]int, 0, winSize)
+		for i := windowLeft; i <= windowRight; i++ {
+			srt = append(srt, int(result100000[i]))
+		}
+		sort.Ints(srt)
+		median := srt[winReach]
+		resultMedian[i100000] = int64(median)
+		if float64(hist) > 1.2*float64(median) {
+			if bannedSequenceStart == -1 {
+				bannedSequenceStart = i100000 // Start of sequence
+			}
+			bannedSequenceEnd = i100000 // Start or within or end of sequence
+			resultBannedMantissas[i100000] = true
+			if i100000 == 99999 { // End of whole series is within a banned sequence
+				if bannedSequenceStart == bannedSequenceEnd {
+					fmt.Printf("Banned 5 digit mantissa: %d\n", bannedSequenceStart)
+				} else {
+					fmt.Printf("Banned 5 digit mantissas: %d-%d\n", bannedSequenceStart, bannedSequenceEnd)
+				}
+			}
+		} else if bannedSequenceStart != -1 { // Just ended a banned sequence
+			if bannedSequenceStart == bannedSequenceEnd {
+				fmt.Printf("Banned 5 digit mantissa: %d\n", bannedSequenceStart)
+			} else {
+				fmt.Printf("Banned 5 digit mantissas: %d-%d\n", bannedSequenceStart, bannedSequenceEnd)
+			}
+			bannedSequenceStart = -1
+		}
+		fmt.Fprintf(fMedian, "%d,%d\n", i100000, srt[winReach])
 	}
 	f100000.Close()
-	return &result100000
+	fMedian.Close()
+	return &result100000, &resultMedian, resultBannedMantissas
 }
