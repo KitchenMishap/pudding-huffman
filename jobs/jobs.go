@@ -144,7 +144,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	totalBlocks := latestBlock.Height() + 1
 	totalNumEpochs := bucketCount(totalBlocks, blocksPerEpoch)
 
-	interestedEpoch := 7 * totalNumEpochs / 8 // Integer math, approximate
+	interestedEpoch := 4 * totalNumEpochs / 8 // Integer math, approximate
 	interestedEpochs := totalNumEpochs/8 - 10 // 10 leeway for approximation
 	interestedBlock := interestedEpoch * blocksPerEpoch
 	interestedBlocks := interestedEpochs * blocksPerEpoch
@@ -385,7 +385,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 		//			sort.Float64s(microEpochToPhasePeaks[meID - interestedMicroEpoch])	ToDo
 		//	}
 
-		if pass == 0 {
+		if true {
 			elapsed = time.Since(startTime)
 			fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "Build residuals map (PARALLEL per exp) ")
 			residualsEncoderByExp, combinedFreq := compress.ParallelGatherResidualFrequenciesByExp10(chain, handles, blocksPerEpoch, blocksPerMicroEpoch, interestedBlock, interestedBlocks, epochToCelebCodes, microEpochToPhasePeaks, MAX_BASE_10_EXP, ESCAPE_VALUE)

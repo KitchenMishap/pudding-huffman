@@ -181,22 +181,36 @@ func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64,
 	return totalBits, true
 }
 
-func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode string) MantissaArray {
+func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode string,
+	optionalResidualEncoders *[20][10]residualencoder.Encoder) MantissaArray {
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
 	phases := NewUint16MantissaArrayFromSats(amounts)
 
+	// Find the residual encoders that go with each amount
+	var encodersForAmounts []residualencoder.Encoder = nil
+	var expForAmounts []int = nil
+	if optionalResidualEncoders != nil {
+		encodersForAmounts = make([]residualencoder.Encoder, len(amounts))
+		expForAmounts = make([]int, len(amounts))
+		for i, a := range amounts {
+			exp, m := ExpM(a)
+			encodersForAmounts[i] = optionalResidualEncoders[exp][m]
+			expForAmounts[i] = exp
+		}
+	}
+
 	// Find some candidate peaks
 	n := 4
-	nPeaks := findEpochPeaks(amounts, n, deterministic)
+	nPeaks := findEpochPeaks(amounts, n, deterministic, encodersForAmounts, expForAmounts)
 	if len(nPeaks) < n {
 		return nil
 	}
 
 	// Refine best peak based on a 1-2-5 pattern
 	bestPeak := nPeaks[0]
-	_, bestBadness := FindBestAnchor(phases, bestPeak)
+	_, bestBadness := FindBestAnchor(phases, bestPeak, encodersForAmounts, expForAmounts)
 	for _, peak := range nPeaks {
-		peak, badness := FindBestAnchor(phases, peak)
+		peak, badness := FindBestAnchor(phases, peak, encodersForAmounts, expForAmounts)
 		if badness < bestBadness {
 			bestBadness = badness
 			bestPeak = peak
@@ -231,37 +245,39 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode st
 	return NewUint16MantissaArrayFromFloats(result)
 }
 
-func FindBestAnchor(phases MantissaArray, initialPeak KFloat) (bestAnchor KFloat, score KFloat) {
+func FindBestAnchor(phases MantissaArray, initialPeak KFloat,
+	encodersForPhases []residualencoder.Encoder, expForPhases []int) (bestAnchor KFloat, score KFloat) {
 	spokes := []KFloat{0.0, 0.30103, 0.69897} // log10 of 1, 2, 5
 
 	// 1. Try the new Rice Method first
 	// We test a small range of k (Rice parameter) to find the most efficient fit
-	bestTotalBits := int64(math.MaxInt64)
-	var riceAnchor KFloat
-	supported := false
+	//bestTotalBits := int64(math.MaxInt64)
+	//var riceAnchor KFloat
+	//supported := false
 
-	for _, shift := range spokes {
-		testAnchor := KFloat(math.Mod(float64(initialPeak)-float64(shift)+1.0, 1.0))
+	/*
+		for _, shift := range spokes {
+			testAnchor := KFloat(math.Mod(float64(initialPeak)-float64(shift)+1.0, 1.0))
 
-		// Check if the current implementation can do high-speed bit estimation
-		// We try k=4 to k=10 (common ranges for these residuals)
-		for k := uint(4); k <= 10; k++ {
-			bits, ok := phases.TryEstimateRiceBits(testAnchor, k)
-			if !ok {
-				break // Fall back to torque method
-			}
-			supported = true
-			if bits < bestTotalBits {
-				bestTotalBits = bits
-				riceAnchor = testAnchor
+			// Check if the current implementation can do high-speed bit estimation
+			// We try k=4 to k=10 (common ranges for these residuals)
+			for k := uint(4); k <= 10; k++ {
+				bits, ok := phases.TryEstimateRiceBits(testAnchor, k)
+				if !ok {
+					break // Fall back to torque method
+				}
+				supported = true
+				if bits < bestTotalBits {
+					bestTotalBits = bits
+					riceAnchor = testAnchor
+				}
 			}
 		}
-	}
 
-	if supported {
-		// Return the anchor that resulted in the fewest bits
-		return riceAnchor, KFloat(bestTotalBits)
-	}
+		if supported {
+			// Return the anchor that resulted in the fewest bits
+			return riceAnchor, KFloat(bestTotalBits)
+		}*/
 
 	// 2. Fallback: The original "Torque/Badness" method
 	bestScore := KFloat(math.MaxFloat32)
@@ -269,7 +285,7 @@ func FindBestAnchor(phases MantissaArray, initialPeak KFloat) (bestAnchor KFloat
 
 	for _, shift := range spokes {
 		testAnchor := KFloat(math.Mod(float64(initialPeak)-float64(shift)+1.0, 1.0))
-		refined, currentBadness := refineAndScore(phases.AsKFloatSlice(), testAnchor, spokes)
+		refined, currentBadness := refineAndScore(phases.AsKFloatSlice(), testAnchor, spokes, encodersForPhases, expForPhases)
 
 		if currentBadness < bestScore {
 			bestScore = currentBadness
@@ -279,7 +295,8 @@ func FindBestAnchor(phases MantissaArray, initialPeak KFloat) (bestAnchor KFloat
 	return absoluteBest, bestScore
 }
 
-func refineAndScore(phases []KFloat, startAnchor KFloat, spokes []KFloat) (KFloat, KFloat) {
+func refineAndScore(phases []KFloat, startAnchor KFloat, spokes []KFloat,
+	encodersForPhases []residualencoder.Encoder, expForPhases []int) (KFloat, KFloat) {
 	const guffThreshold = 0.05 // Should never be more than 0.12. If it gets to 0.15, we lose the ability to
 	// recognize the "10" of a "5-10-20" peak pattern and everything falls apart
 	const iterations = 4
@@ -325,7 +342,7 @@ func refineAndScore(phases []KFloat, startAnchor KFloat, spokes []KFloat) (KFloa
 		if validHits > 0 {
 			// Adjust the anchor by the average torque (the M-step)
 			//currentAnchor = math.Mod(currentAnchor+(totalTorque/validHits)+1.0, 1.0)
-			currentAnchor = KFloat(math.Mod(float64(currentAnchor-(totalTorque/validHits)+1.0), 1.0)) // Gemini test, reverse the torque
+			//currentAnchor = KFloat(math.Mod(float64(currentAnchor-(totalTorque/validHits)+1.0), 1.0)) // Gemini test, reverse the torque
 			// Gemini now says change it back to a +...
 			currentAnchor = KFloat(math.Mod(float64(currentAnchor+(totalTorque/validHits)+1.0), 1.0)) // Gemini test, reverse the torque
 			if math.IsNaN(float64(currentAnchor)) {
@@ -381,11 +398,12 @@ func refineAndScore(phases []KFloat, startAnchor KFloat, spokes []KFloat) (KFloa
 	return currentAnchor, badness
 }
 
-func findEpochPeaks(amounts []int64, k int, deterministic *rand.Rand) []KFloat {
+func findEpochPeaks(amounts []int64, k int, deterministic *rand.Rand,
+	encodersForAmounts []residualencoder.Encoder, expForAmounts []int) []KFloat {
 	result := make([]KFloat, 0)
 	bestBadness := KFloat(math.MaxFloat32)
 	for try := 0; try < 4; try++ {
-		guess, badness := guessEpochPeaksClock(amounts, k, deterministic)
+		guess, badness := guessEpochPeaksClock(amounts, k, deterministic, encodersForAmounts, expForAmounts)
 		if badness < bestBadness {
 			bestBadness = badness
 			result = guess
@@ -394,7 +412,10 @@ func findEpochPeaks(amounts []int64, k int, deterministic *rand.Rand) []KFloat {
 	return result
 }
 
-func guessEpochPeaksClock(amounts []int64, k int, deterministic *rand.Rand) (logCentroids []KFloat, badnessScore KFloat) {
+// If encodersForAmounts[] and expForAmounts[] are supplied, badness score is a total bitcost of distances
+func guessEpochPeaksClock(amounts []int64, k int, deterministic *rand.Rand,
+	encodersForAmounts []residualencoder.Encoder, expForAmounts []int) (logCentroids []KFloat, badnessScore KFloat) {
+
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
 	phases := make([]KFloat, len(amounts))
 	for i, v := range amounts {
@@ -408,26 +429,36 @@ func guessEpochPeaksClock(amounts []int64, k int, deterministic *rand.Rand) (log
 
 	logCentroids = initializeCentroids(phases, k, deterministic)
 
-	for i := 0; i < 8; i++ { // 10 iterations is usually enough for 1D
+	for it := 0; it < 8; it++ { // 10 iterations is usually enough for 1D
 		clusters := make([][]KFloat, k)
 
 		// 2. Assign to nearest centroid
 		badnessScore = KFloat(0)
-		for i, val := range phases {
-			if i%1000 == 0 {
+		for ii, val := range phases {
+			if ii%1000 == 0 {
 				runtime.Gosched()
 			} //...and breathe
 			best := 0
-			minDist := cyclicDistance(val, logCentroids[0])
+			minDist := float64(cyclicDistance(val, logCentroids[0]))
+			if expForAmounts != nil {
+				minDist = math.Pow(10, minDist+float64(expForAmounts[ii]))
+			}
 			for j := 1; j < k; j++ {
-				d := cyclicDistance(val, logCentroids[j])
+				d := float64(cyclicDistance(val, logCentroids[j]))
+				if expForAmounts != nil {
+					d = math.Pow(10, float64(d)+float64(expForAmounts[ii]))
+				}
 				if d < minDist {
 					minDist = d
 					best = j
 				}
 			}
 			clusters[best] = append(clusters[best], val)
-			badnessScore += minDist
+			if encodersForAmounts != nil && encodersForAmounts[ii] != nil {
+				badnessScore += KFloat(encodersForAmounts[ii].Encode(int64(minDist)).Length)
+			} else {
+				badnessScore += KFloat(minDist)
+			}
 		}
 
 		// 3. Update centroids using a "circular median" or mean
@@ -798,7 +829,7 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 					microEpochToPhasePeaks[me-interestedMicroEpoch] = nil
 				} else {
 					// This is the heavy lifting
-					microEpochToPhasePeaks[me-interestedMicroEpoch] = FindEpochPeaksMain(buffer, localRand, spokesMode)
+					microEpochToPhasePeaks[me-interestedMicroEpoch] = FindEpochPeaksMain(buffer, localRand, spokesMode, optionalResidualEncoders)
 				}
 			} // for micro epochs
 
