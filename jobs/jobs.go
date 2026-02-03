@@ -127,7 +127,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	fmt.Printf("The time is now: %s\n", startTime.Format(time.TimeOnly))
 	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Very start Kinda (after user has typed!) **==")
 
-	_, _, _ = chainstats.WholeChainMantissaHistogram(reader.Blockchain(), reader.HandleCreator(), 0, 888888)
+	_, _, banned5digitmantissas := chainstats.WholeChainMantissaHistogram(reader.Blockchain(), reader.HandleCreator(), 0, 888888)
 
 	if err != nil {
 		return err
@@ -351,7 +351,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 
 		microEpochToPhasePeaks, err := kmeans.ParallelKMeans(chain, handles, interestedBlock, interestedBlocks, blocksPerMicroEpoch,
 			epochToCelebCodes, blocksPerEpoch, deterministic, excludeTransOutputs, excludeCelebs,
-			sSpokes, nil)
+			sSpokes, nil, banned5digitmantissas)
 		if err != nil {
 			return err
 		}
@@ -396,7 +396,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			fmt.Printf("SECOND round of KMeans...")
 			microEpochToPhasePeaks, err = kmeans.ParallelKMeans(chain, handles, interestedBlock, interestedBlocks, blocksPerMicroEpoch,
 				epochToCelebCodes, blocksPerEpoch, deterministic, excludeTransOutputs, excludeCelebs,
-				sSpokes, residualsEncoderByExp)
+				sSpokes, residualsEncoderByExp, banned5digitmantissas)
 			if err != nil {
 				return err
 			}

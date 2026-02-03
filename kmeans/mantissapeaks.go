@@ -622,7 +622,8 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	celebCodesPerEpoch []map[int64]huffman.BitCode, blocksPerEpoch int64, deterministic *rand.Rand,
 	transToExcludedOutput *[2000000000]byte,
 	epochToExcludedCelebs []map[int64]bool, spokesMode string,
-	optionalResidualEncoders *[20][10]residualencoder.Encoder) ([]MantissaArray, error) {
+	optionalResidualEncoders *[20][10]residualencoder.Encoder,
+	banned5DigitMantissas map[int]bool) ([]MantissaArray, error) {
 
 	sJob := "Peak detection: PARALLEL by micro-epoch"
 	fmt.Printf("\t%s\n", sJob)
@@ -777,20 +778,27 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 							amount := sats
 
 							excluded := false
-							found := false
-							exclusionListExists := false
-							if celebsToExclude != nil {
-								exclusionListExists = true
-								excluded, found = celebsToExclude[amount]
-							}
-							if exclusionListExists && found {
-								excluded = true
-							}
 
-							if optionalResidualEncoders != nil {
-								exp, m := ExpM(sats)
-								if optionalResidualEncoders[exp][m] == nil {
+							mantissa5Digit := Mantissa5Digit(sats)
+							_, found := banned5DigitMantissas[int(mantissa5Digit)]
+							if found {
+								excluded = true
+							} else {
+								found := false
+								exclusionListExists := false
+								if celebsToExclude != nil {
+									exclusionListExists = true
+									excluded, found = celebsToExclude[amount]
+								}
+								if exclusionListExists && found {
 									excluded = true
+								}
+
+								if optionalResidualEncoders != nil {
+									exp, m := ExpM(sats)
+									if optionalResidualEncoders[exp][m] == nil {
+										excluded = true
+									}
 								}
 							}
 
@@ -856,6 +864,19 @@ func ParallelKMeans(chain chainreadinterface.IBlockChain, handles chainreadinter
 	fmt.Printf("\tTODO! Considered %d transactions (should be 1169006472)\n", transactionsInChain)
 	fmt.Printf("\tTODO! Considered %d txos (should be 3,244,970,783)\n", txosInChain)
 	return microEpochToPhasePeaks, nil
+}
+
+func Mantissa5Digit(sats int64) int64 {
+	log10 := math.Log10(float64(sats))
+	integer := int(log10)
+	frac := log10 - float64(integer)
+	zeroToOne := frac
+	oneToTen := math.Pow(10, zeroToOne)
+	index100000 := int(math.Round(oneToTen * 10000))
+	if index100000 >= 100000 {
+		index100000 = 99999 // Just to be sure
+	}
+	return int64(index100000)
 }
 
 var (
