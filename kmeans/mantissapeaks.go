@@ -9,7 +9,7 @@ import (
 	"github.com/KitchenMishap/pudding-shed/chainreadinterface"
 	"golang.org/x/sync/errgroup"
 	"math"
-	"math/bits"
+	//"math/bits"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -48,7 +48,11 @@ func NewKFloatMantissaArray(size int) *KFloatMantissaArray {
 func NewKFloatMantissaArrayFromFloats(a []float64) *KFloatMantissaArray {
 	result := NewKFloatMantissaArray(len(a))
 	for i, v := range a {
-		result.data[i] = KFloat(v)
+		if KFloat(v) < 1.0 {
+			result.data[i] = KFloat(v)
+		} else {
+			result.data[i] = 0.0 // Sometimes the KFloat(v) got rounded up to 1.0 (illegal for clock!)
+		}
 	}
 	return result
 }
@@ -82,6 +86,7 @@ func (kma *KFloatMantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64,
 	return -1, false // Not implemented flag
 }
 
+/*
 type Uint16MantissaArray struct {
 	data []uint16
 }
@@ -106,17 +111,21 @@ func TenToPower(pow uint16) float64 {
 		}
 	})
 	return TenToPowerLookup[pow]
-}
+}*/
 
+/*
 // Map Satoshi to the 0...65535 dial
-func NewUint16MantissaArrayFromSats(sats []int64) *Uint16MantissaArray {
-	BuildLog10Table() // Ensure table is ready
-	arr := &Uint16MantissaArray{data: make([]uint16, len(sats))}
-	for i, s := range sats {
-		arr.data[i], _ = FastLog10FractionalAndExp(s)
+
+	func NewUint16MantissaArrayFromSats(sats []int64) *Uint16MantissaArray {
+		BuildLog10Table() // Ensure table is ready
+		arr := &Uint16MantissaArray{data: make([]uint16, len(sats))}
+		for i, s := range sats {
+			arr.data[i], _ = FastLog10FractionalAndExp(s)
+		}
+		return arr
 	}
-	return arr
-}
+*/
+/*
 func NewUint16MantissaArrayFromFloats(logFloats []float64) *Uint16MantissaArray {
 	arr := &Uint16MantissaArray{data: make([]uint16, len(logFloats))}
 	for i, frac := range logFloats {
@@ -153,11 +162,11 @@ func (uma *Uint16MantissaArray) Get(i int) KFloat {
 	return KFloat(v) / 65536.0
 }
 func (uma *Uint16MantissaArray) Get10toPow(i int, additionalExp int) float64 {
-	if additionalExp >= 0 {
-		return TenToPower(uma.data[i]) * Pows10[additionalExp]
-	} else {
-		return math.Pow(10, float64(uma.data[i])+float64(additionalExp))
-	}
+	//	if additionalExp >= 0 {
+	//		return TenToPower(uma.data[i]) * Pows10[additionalExp]		// I no longer trust this fn!
+	//	} else {
+	return math.Pow(10, float64(uma.data[i])+float64(additionalExp))
+	//	}
 }
 
 func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64, bool) {
@@ -179,12 +188,26 @@ func (uma *Uint16MantissaArray) TryEstimateRiceBits(peak KFloat, k uint) (int64,
 		totalBits += int64(unsigned>>k) + 1 + int64(k)
 	}
 	return totalBits, true
-}
+}*/
 
 func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode string,
 	optionalResidualEncoders *[20][10]residualencoder.Encoder) MantissaArray {
 	// 1. Map all mantissas to the 0.0 to 1.0 "Clock face"
-	phases := NewUint16MantissaArrayFromSats(amounts)
+	//phases := NewUint16MantissaArrayFromSats(amounts)
+	flts := make([]float64, len(amounts))
+	for i, v := range amounts {
+		l10 := math.Log10(float64(v))
+		dec := 0
+		for l10 < 0 {
+			l10 += 1.0
+			dec++
+		}
+		whole := int(l10)
+		frac := l10 - float64(whole)
+		whole -= dec
+		flts[i] = frac
+	}
+	phases := NewKFloatMantissaArrayFromFloats(flts)
 
 	// Find the residual encoders that go with each amount
 	var encodersForAmounts []residualencoder.Encoder = nil
@@ -242,7 +265,7 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode st
 		panic("illegal spokesMode")
 	}
 
-	return NewUint16MantissaArrayFromFloats(result)
+	return NewKFloatMantissaArrayFromFloats(result)
 }
 
 func FindBestAnchor(phases MantissaArray, initialPeak KFloat,
@@ -561,10 +584,28 @@ func ExpPeakResidual(amount int64, logCentroids MantissaArray) (exp int, m int, 
 
 	// 1. Get our 16-bit "Clock Position" and the integer Exponent
 	// This replaces Log10, Modf, and the < 0 check
-	dialPos, e := FastLog10FractionalAndExp(amount)
-	logCentroid := KFloat(dialPos) / 65536.0
-	exp = e
+	/*	dialPos, e := FastLog10FractionalAndExp(amount)		I no longer trust that fn!
+		logCentroid := KFloat(dialPos) / 65536.0
+		exp = e */
+	l10 := math.Log10(float64(amount))
+	dec := 0
+	for l10 < 0.0 {
+		l10 += 1.0
+		dec++
+	}
+	whole := int(l10)
+	frac := l10 - float64(whole)
+	logCentroid := KFloat(frac)
+	if logCentroid >= 1.0 {
+		// Can happen on reduction to KFloat
+		logCentroid -= 1.0
+	}
+	exp = whole - dec
+
 	m = int(logCentroid * 10) // A number for grouping amounts into 10 "log mantissa classe"
+	if m == 10 {
+		panic("m should be <10")
+	}
 
 	// 2. Standard distance check (Now much faster with KFloat)
 	bestPeak := 0
@@ -603,9 +644,20 @@ func ExpM(amount int64) (exp int, m int) {
 
 	// 1. Get our 16-bit "Clock Position" and the integer Exponent
 	// This replaces Log10, Modf, and the < 0 check
-	dialPos, e := FastLog10FractionalAndExp(amount)
-	logCentroid := KFloat(dialPos) / 65536.0
-	exp = e
+	/*	dialPos, e := FastLog10FractionalAndExp(amount)		// I no longer trust this fn!
+		logCentroid := KFloat(dialPos) / 65536.0
+		exp = e */
+	l10 := math.Log10(float64(amount))
+	dec := 0
+	for l10 < 0.0 {
+		l10 += 1.0
+		dec++
+	}
+	whole := int(l10)
+	frac := l10 - float64(whole)
+	logCentroid := frac
+	exp = whole - dec
+
 	m = int(logCentroid * 10) // A number for grouping amounts into 10 "log mantissa classe"
 	return exp, m
 }
@@ -896,6 +948,7 @@ func BuildLog10Table() {
 	})
 }
 
+/* I no longer trust this fn!
 // FastLog10Fractional returns the uint16 "dial" position (0-65535)
 func FastLog10FractionalAndExp(s int64) (uint16, int) {
 	if s <= 0 {
@@ -923,7 +976,7 @@ func FastLog10FractionalAndExp(s int64) (uint16, int) {
 	e, frac := math.Modf(totalLog)
 
 	return uint16(frac * 65536.0), int(e)
-}
+}*/
 
 /*
 // Returns the 0-65535 dial position and the base-10 exponent

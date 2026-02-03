@@ -105,6 +105,7 @@ func WholeChainMantissaHistogram(chain chainreadinterface.IBlockChain,
 				done := atomic.AddInt64(&completedBlocks, blocksInBatch)
 				if done%1000 == 0 || done == interestedBlocks {
 					fmt.Printf("\r\tProgress: %.1f%%    ", float64(100*done)/float64(interestedBlocks))
+					runtime.Gosched()
 				}
 
 			} // for blockBatch from chan
