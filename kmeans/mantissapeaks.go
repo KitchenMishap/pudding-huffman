@@ -270,7 +270,19 @@ func FindEpochPeaksMain(amounts []int64, deterministic *rand.Rand, spokesMode st
 
 func FindBestAnchor(phases MantissaArray, initialPeak KFloat,
 	encodersForPhases []residualencoder.Encoder, expForPhases []int) (bestAnchor KFloat, score KFloat) {
-	spokes := []KFloat{0.0, 0.30103, 0.69897} // log10 of 1, 2, 5
+	//	spokes := []KFloat{0.0, 0.30103, 0.69897} // log10 of 1, 2, 5
+	// Try the 1,2,3,4,5,6,7,8,9 spoke pattern!
+	spokes := []KFloat{
+		KFloat(math.Log10(1.0)),
+		KFloat(math.Log10(2.0)),
+		KFloat(math.Log10(3.0)),
+		KFloat(math.Log10(4.0)),
+		KFloat(math.Log10(5.0)),
+		KFloat(math.Log10(6.0)),
+		KFloat(math.Log10(7.0)),
+		KFloat(math.Log10(8.0)),
+		KFloat(math.Log10(9.0)),
+	}
 
 	// 1. Try the new Rice Method first
 	// We test a small range of k (Rice parameter) to find the most efficient fit

@@ -154,7 +154,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 	interestedMicroEpoch := interestedBlock / blocksPerMicroEpoch
 
 	fmt.Printf("** In this run, we are looking at %d blocks, starting at %d **\n", interestedBlocks, interestedBlock)
-	sSpokes := "1-2-5 spokes"
+	sSpokes := "9 spokes"
 	fmt.Printf("** In this run, we are using %s **\n", sSpokes)
 	fmt.Printf("** In this run, there are %d blocks in a micro-epoch **\n", blocksPerMicroEpoch)
 	fmt.Printf("** In this run, there are %d blocks in an epoch **\n", blocksPerEpoch)
@@ -441,7 +441,7 @@ func GatherStatistics(folder string, deterministic *rand.Rand) error {
 			result, microEpochToPeakStrengths, excludeTransOutputs, excludeCelebs = compress.ParallelSimulateCompressionWithKMeans(chain, handles,
 				blocksPerEpoch, blocksPerMicroEpoch, interestedBlock, interestedBlocks,
 				epochToCelebCodes, expCodes, residualsEncoderByExp,
-				magnitudeCodes, combinedCodes, microEpochToPhasePeaks)
+				magnitudeCodes, combinedCodes, microEpochToPhasePeaks, pass)
 			jobElapsed := time.Since(tJob)
 			fmt.Printf("\t%s: Job took: [%5.1f min]\n", sJob, jobElapsed.Minutes())
 

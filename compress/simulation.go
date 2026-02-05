@@ -435,7 +435,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	residualEncoderByExpM *[20][10]residualencoder.Encoder,
 	magnitudeCodes map[int64]huffman.BitCode,
 	combinedCodes map[int64]huffman.BitCode,
-	microEpochToPhasePeaks []kmeans.MantissaArray) (CompressionStats,
+	microEpochToPhasePeaks []kmeans.MantissaArray,
+	pass int) (CompressionStats,
 	[][CSV_COLUMNS]int64,
 	*[2000000000]byte, // Which outputs of each transaction to exclude from next k-means peak detection
 	[]map[int64]bool) { // Which celebrities to exclude (per epoch) from next k-means peak detection
@@ -486,16 +487,20 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	}
 
 	mu := sync.Mutex{}
-	ghostsDigitsFile, err := os.Create("GhostPriceDigits.csv")
+	filename := "GhostHitPrices_FirstPass.csv"
+	if pass == 1 {
+		filename = "GhostHitPrices_SecondPass.csv"
+	}
+	ghostsDigitsFile, err := os.Create(filename)
 	if err != nil {
-		panic("Could not open GhostPriceDigits.csv")
+		panic("Could not create .csv file")
 	}
 
 	bigCode := huffman.BitCode{0xFFFFFFFFFFFFFFFF, 64}
-	celebSelector := huffman.BitCode{0b00, 2}
-	ghostSelector := huffman.BitCode{0b01, 2}
-	literalSelector := huffman.BitCode{0b10, 2}
-	restSelector := huffman.BitCode{0b11, 2}
+	celebSelector := huffman.BitCode{0b10, 2}
+	ghostSelector := huffman.BitCode{0b0, 1} // Reduce the tariff on ghosts for now!
+	literalSelector := huffman.BitCode{0b110, 3}
+	restSelector := huffman.BitCode{0b111, 3}
 
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
@@ -513,7 +518,8 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 				default:
 				}
 
-				localPriceTally := [1001]byte{}
+				// Enough room for 5 digits and 9 peakIdx's. Only permit one entry at a particular price per peakIdx val
+				localPriceTally := [9][100001]byte{}
 				localPriceReport := make([]string, 0, 1000)
 
 				for blockIdx := blockThousand; blockIdx < blockThousand+blocksInBatch && blockIdx < interestedBlock+interestedBlocks; blockIdx++ {
@@ -569,6 +575,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 						outputsAndFeesEncodingChoice := make([]huffman.BitCode, len(outputsAndFeesAmounts))
 						outputsAndFeesQuotes := make([]string, len(outputsAndFeesAmounts))
 						satsLog10 := kmeans.KFloat(0)
+						peakIdx := 0
 						for c, amount := range outputsAndFeesAmounts {
 
 							// Stage 1: Celebrity cost
@@ -602,7 +609,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							// Amount 0 will trigger a log10(0) and things will go wrong. But we know amount 0 will
 							// be treated as a celeb or literal so we're not interested in the "ghost" cost of a zero
 							if amount > 0 && microEpochToPhasePeaks[microEpochID-interestedMicroEpoch] != nil && microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Len() > 0 {
-								e, m, peakIdx, harmonic, r := kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID-interestedMicroEpoch])
+								var e, m, harmonic int
+								var r int64
+								e, m, peakIdx, harmonic, r = kmeans.ExpPeakResidual(amount, microEpochToPhasePeaks[microEpochID-interestedMicroEpoch])
 								if residualEncoderByExpM[e][m] == nil {
 									// No worthwhile encoder (many were deleted if their peak width was a large proportion compared to their peak)
 								} else {
@@ -618,6 +627,7 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 										local.peakStrengths[epochID][peakIdx]++ // Yes this IS supposed to be here. It's for oracle price prediction
 									}
 									satsLog10 = microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Get(peakIdx)
+									//satsLog10 = microEpochToPhasePeaks[microEpochID-interestedMicroEpoch].Get(0)
 									if eCode, ok := expCodes[int64(e)]; ok {
 										ghostCode = huffman.JoinBitCodes(ghostSelector, combinedCode, eCode, rCode)
 										if doPodium {
@@ -633,9 +643,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 										}
 									} else {
 										panic("missing exp code")
-									}
-								}
-							}
+									} // if expCode
+								} // if residualEncoder[e][m] exists
+							} // if amount > 0
 
 							// Stage 3: Magnitude-encoded Literal cost. Always available.
 							literalCode := bigCode
@@ -682,9 +692,9 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 							outputsAndFeesCodes[c] = chosenCode
 							outputsAndFeesEncodingChoice[c] = choice
 							outputsAndFeesQuotes[c] = chosenQuote
-						}
+						} // for c, amount
 						// Find the most costly output (or fees) of this transaction in terms of bitcount
-						mostExpensive := int(0)
+						mostExpensive := 0
 						loser := -1
 						for c, code := range outputsAndFeesCodes {
 							if code.Length > mostExpensive {
@@ -711,17 +721,95 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 								local.stats.GhostHits++
 								local.stats.GhostBits += uint64(code.Length)
 
-								// Worth outputting to file!
-								year100 := int(100 * (float64(blockIdx) / 144 / 365.25))
+								//*********************************************
+								//*** (sometimes) OUTPUT A LINE OF CSV FILE ***
+								//*********************************************
+
+								// Ghosts are very much worth writing to file! They give the Btc Price to the
+								// nearest power of 10! Of course, we HAVE detected peaks in the "histogram of satoshi
+								// amounts" for each microEpoch. But finding a "ghost that wins the bitcost battle"
+								// here near one of those peaks really is the "proof of pudding" that suggests
+								// "That peak really might be something you know!"
+
+								// We know the (modulo power of 10) log10 of the amount of sats that the peak
+								// represents (note that the peak represents "that amount of sats times ANY power
+								// of ten!"). And we know the peak index (peak 0 typically should represent the
+								// amount of satoshis corresponding to $100, or $1000, or $10,000, or even £10,000)
+
+								// BUT with this ghost hit, we also know the amount of satoshis for the ghost hit itself,
+								// the residue, and EVEN whether that ghost hit was a FEES amount or an OUTPUT amount.
+								// We "would" know if the hit was "deemed" to be "probably change", BUT that scenario
+								// is so bit-cheap to represent it virtually never would be beaten by a "ghost encoding"
+								// We also know how many bits this ghost-hit took to encode
+
+								ghostIsFees := (c == len(outputsAndFeesCodes)-1)
+								ghostCodeLength := code.Length
+								ghostAmount := outputsAndFeesAmounts[c]
+
+								// We start with satsLog10, which is a number between 0 and  < 1
+								// To get the fiat price, we first take the reciprocal, which means negating the sats log10
 								fiatLog10 := 1.0 - satsLog10
-								fiatDigits := int(math.Pow(10, float64(fiatLog10)) * 100)
-								ghostPrice := fiatDigits
-								price := ghostPrice
-								localPriceTally[price]++
-								if localPriceTally[price] == 1 {
-									localPriceReport = append(localPriceReport, fmt.Sprintf("%.2f, %d", 2009+float64(year100)/100, price))
+								if fiatLog10 == 1.0 {
+									fiatLog10 = 0.0 // This adjustment is needed when the price is an exact power of 10
 								}
-							}
+								// (So far, if peakIdx==2, then fiatLog10 doesn't estimate the price of
+								// 1.00 BTC, it estimates the price of 3.00 BTC (0 for x1, 1 for x2, 2 for x3 etc...)
+								multiBtcFiatPriceLog10 := fiatLog10
+								// Work out the fiat price of the multiBtc
+								multiBtcFiatPrice := math.Pow(10, float64(multiBtcFiatPriceLog10)) // This is a number 1 to <10
+								// Turn it into a 5 digit number
+								multiBtcFiveDigitPrice := int(math.Round(multiBtcFiatPrice * 10000))
+								// Now we're going to convert to the fiat price for a single bitcoin.
+								singleBtcFiatPrice := multiBtcFiatPrice / float64(peakIdx+1)
+								if singleBtcFiatPrice < 1.0 {
+									singleBtcFiatPrice += 1.0
+								}
+								// Turn it into a five digit number
+								singleBtcFiveDigitPrice := int(math.Round(singleBtcFiatPrice * 10000))
+
+								// Now we have a price, we get selective about CSV rows to keep the filesize down!
+								// We ONLY store a row if it has a unique (peakIdx, price) pair per 1000 blocks
+								localPriceTally[peakIdx][singleBtcFiveDigitPrice]++
+								if localPriceTally[peakIdx][singleBtcFiveDigitPrice] == 1 {
+									// Firstly, the block height
+									sLine := fmt.Sprintf("%d,\t", blockIdx)
+									// Secondly, the peak index
+									sLine += fmt.Sprintf("%d,\t", peakIdx)
+
+									// Now work out the year
+									year100 := int(100 * (float64(blockIdx) / 144 / 365.25))
+									// A hard to explain refinement! But it makes the single btc price slightly less dashed
+									// compared to the multi-btc prices
+									year1000 := year100*10 + peakIdx
+									sLine += fmt.Sprintf("%.3f,\t", 2009+float64(year1000)/1000)
+
+									// Then comes the fiat price for one btc
+									sLine += fmt.Sprintf("%d,\t", singleBtcFiveDigitPrice)
+
+									// Then come zero or more (peakIdx times) zeroes. These serve to say "No data here!"
+									for blanks := 0; blanks < peakIdx; blanks++ {
+										sLine += "0,\t"
+									}
+									// Then comes the multiBtc price that was discovered by this ghost
+									sLine += fmt.Sprintf("%d,\t", multiBtcFiveDigitPrice)
+									// Then comes zero or more (8 - peakIdx times) zeroes. Again, "No data here!"
+									for blanks := 0; blanks < (8 - peakIdx); blanks++ {
+										sLine += "0,\t"
+									}
+
+									if ghostIsFees {
+										sLine += ",\tFEES"
+									} else {
+										sLine += ",\tOUTPUT"
+									}
+									sLine += fmt.Sprintf(",\t%d", ghostCodeLength)
+									sLine += fmt.Sprintf(",\t%dsats", ghostAmount)
+									sLine += fmt.Sprintf(",\t$%.2f", float64(multiBtcFiveDigitPrice)/100)
+
+									localPriceReport = append(localPriceReport, sLine)
+								} // if line of CSV
+							} // if ghost
+
 							if outputsAndFeesEncodingChoice[c] == restSelector {
 								local.stats.RestHits++
 								local.stats.RestBits += uint64(code.Length)
@@ -835,6 +923,10 @@ func ParallelSimulateCompressionWithKMeans(chain chainreadinterface.IBlockChain,
 	fmt.Printf("\nDone that now\n")
 
 	ghostsDigitsFile.Close()
+	fmt.Printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n")
+	fmt.Printf("XXX FINISHED WRITING FILE XXX\n")
+	fmt.Printf("XXX %s\n", filename)
+	fmt.Printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n")
 
 	// Final Reduction
 	globalStats := CompressionStats{}
