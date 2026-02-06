@@ -21,6 +21,26 @@ import (
 	"time"
 )
 
+func ComplexityToFile(folder string) error {
+	reader, err := blockchain.NewChainReader(folder)
+	if err != nil {
+		return err
+	}
+
+	var startTime = time.Now()
+	elapsed := time.Since(startTime)
+	fmt.Printf("The time is now: %s\n", startTime.Format(time.TimeOnly))
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "==** Very start Kinda (after user has typed!) **==")
+
+	fmt.Printf("Scanning blockchain to complexity file...\n")
+	err = chainstats.WholeChainNibbleComplexity(reader.Blockchain(), reader.HandleCreator(), 0, 888_888)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("[%5.1f min] %s\n", elapsed.Minutes(), "\t...Done it\n")
+	return nil
+}
+
 type Histograms struct {
 	// Sharding the histogram maps reduces lock contention on the maps
 	shardsAmount [256]map[int64]int64
