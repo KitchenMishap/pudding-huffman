@@ -272,8 +272,8 @@ func getPriceByInverse(amounts []int64) (fiatWinners []Contender) {
 		return fiatWinners[i].complexity > fiatWinners[j].complexity
 	})
 
-	if len(fiatWinners) >= winners {
-		return fiatWinners[0:winners]
+	if len(fiatWinners) >= 0 {
+		return fiatWinners[:]
 	} else {
 		return make([]Contender, 0)
 	}
@@ -298,7 +298,19 @@ func FindPairs(contenders []Contender, maxPrice int64) []Contender {
 	sort.Slice(bins, func(i, j int) bool {
 		return bins[i].count > bins[j].count
 	})
-	return bins[:winners]
+
+	runningTotal := 0
+	cutoff := len(contenders) / 10
+	var threshold int
+	var biggestBins Contender
+	for threshold, biggestBins = range bins {
+		runningTotal += int(biggestBins.count)
+		if runningTotal >= cutoff || biggestBins.count == 1 {
+			break
+		}
+	}
+
+	return bins[:threshold]
 }
 
 /*	results := make([]Contender, 0, len(contenders))
